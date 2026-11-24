@@ -1,0 +1,29 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Manalens",
+	"Description": "Game analytics for Unreal Engine: launches, sessions, game events, errors, and consent. Sends events to Manalens with your Publishable key.",
+	"Category": "Analytics",
+	"CreatedBy": "Manalens",
+	"CreatedByURL": "https://manalens.dev",
+	"DocsURL": "https://docs.manalens.dev/sdks/unreal",
+	"SupportURL": "https://manalens.dev/support",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "Manalens",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64", "Mac", "Linux", "LinuxArm64", "Android", "IOS" ]
+		},
+		{
+			"Name": "ManalensTests",
+			"Type": "Editor",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64", "Mac", "Linux" ]
+		}
+	]
+}

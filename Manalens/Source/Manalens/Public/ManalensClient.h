@@ -1,0 +1,252 @@
+// Copyright (c) 2026 Manalens. MIT License.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Dom/JsonObject.h"
+#include "ManalensTypes.h"
+#include "Templates/Function.h"
+#include "Templates/SharedPointer.h"
+
+MANALENS_API DECLARE_LOG_CATEGORY_EXTERN(LogManalens, Log, All);
+
+/** Options of the client. UManalensSubsystem fills them from the project settings. */
+struct MANALENS_API FManalensConfig
+{
+	/** The project Publishable key (mana_pk_...). A Secret key or an API key is refused. */
+	FString PublishableKey;
+	/** The Manalens ingest URL, without /v0/events. */
+	FString Endpoint;
+	FString AppVersion;
+	FString Build;
+	/** steam, itch, epic, gog, app_store, play, other, or empty. */
+	FString Storefront;
+	/** true: no events and no stored ID until SetConsent(true). */
+	bool bConsentRequired = false;
+	bool bDebug = false;
+	double FlushIntervalSeconds = 10.0;
+	/** Send when this many events are queued. Also the batch size (at most 50). */
+	int32 FlushAt = 20;
+	int32 MaxQueue = 1000;
+	int32 MaxAutoErrorsPerSession = 50;
+	/** Folder for the state, the queue, and the opt-out marker. Empty: Saved/Manalens. */
+	FString StorageDir;
+	/** Empty: the platform of this build (PLATFORM_* macros). */
+	FString Platform;
+	/** Empty: the current culture, for example en-US. */
+	FString Locale;
+	/** Minutes from UTC (480 for UTC+8). MAX_int32: read the system clock. Out of -720 to 840: not sent. */
+	int32 UtcOffsetMinutes = MAX_int32;
+};
+
+/** The result of one HTTP request. Status 0 is a network error. */
+struct FManalensHttpResult
+{
+	int32 Status = 0;
+	FString RetryAfter;
+	FString Body;
+};
+
+using FManalensSendDone = TFunction<void(const FManalensHttpResult&)>;
+using FManalensTransport = TFunction<void(const FString& Url, const TArray<TPair<FString, FString>>& Headers, const FString& Body, FManalensSendDone Done)>;
+
+/** What to do with a batch after a response. */
+enum class EManalensSendOutcome : uint8
+{
+	/** 2xx: the batch is stored. */
+	Sent,
+	/** Network error, 5xx, 408, or 429: keep the batch, back off, and send it again with the same message_id values. */
+	Retry,
+	/** Another 4xx: the same batch would be refused again, so drop it. */
+	Drop,
+};
+
+/**
+ * The Manalens client: identity, sessions, the offline queue, consent, errors,
+ * and sending. It has no UObject and no engine state, so the automation tests
+ * drive it with a fake clock, fake IDs, and a fake transport. Use it on the
+ * game thread only. Games use UManalensSubsystem.
+ */
+class MANALENS_API FManalensClient
+{
+public:
+	static constexpr const TCHAR* LibraryName = TEXT("Manalens Unreal SDK");
+	static constexpr const TCHAR* LibraryVersion = TEXT("0.1.0");
+	static constexpr double SessionTimeoutSeconds = 30.0 * 60.0;
+	static constexpr double SessionMaxAgeSeconds = 24.0 * 60.0 * 60.0;
+	/** The collector accepts app events up to 7 days old. Keep 1 hour of margin for clock skew. */
+	static constexpr double MaxEventAgeSeconds = 7.0 * 24.0 * 3600.0 - 3600.0;
+	static constexpr double MaxBackoffSeconds = 300.0;
+	static constexpr int32 MaxBatch = 50;
+	static constexpr int32 MaxPropertyKeys = 50;
+	static constexpr int32 MaxPropertyBytes = 8 * 1024;
+	static constexpr int32 MaxString = 1024;
+	static constexpr int32 Breadcrumbs = 20;
+	/** Error limits (as the Godot and Unity SDKs): one fingerprint at most once a second, at most 20 errors in 10 seconds. */
+	static constexpr double ErrorDedupeSeconds = 1.0;
+	static constexpr double ErrorWindowSeconds = 10.0;
+	static constexpr int32 ErrorWindowMax = 20;
+	static constexpr const TCHAR* HandoffParam = TEXT("mana_hid");
+	static constexpr const TCHAR* StateFileName = TEXT("manalens_state.json");
+	static constexpr const TCHAR* QueueFileName = TEXT("manalens_queue.txt");
+	static constexpr const TCHAR* OptOutFileName = TEXT("manalens_optout");
+
+	FManalensClient();
+	~FManalensClient();
+
+	/** Unix seconds. Tests replace it. */
+	TFunction<double()> Now;
+	/** A new UUID v4. Tests replace it. */
+	TFunction<FString()> NewId;
+	/** A number in [0, 1) for the backoff jitter. Tests replace it. */
+	TFunction<double()> Random;
+	/** Sends one request. The default uses the engine HTTP module. */
+	FManalensTransport Transport;
+	/** Events were dropped and will never be sent. Status is the HTTP status of a refusal, or 0 when the SDK dropped them itself. */
+	TFunction<void(int32 /*Status*/, int32 /*Dropped*/)> OnSendFailed;
+	/** After each response. bOk is false for a network error or a retried status. */
+	TFunction<void(int32 /*Sent*/, bool /*bOk*/)> OnFlushed;
+	/** Gets the properties of each error event before it is queued. Return nullptr to drop the error. */
+	TFunction<TSharedPtr<FJsonObject>(TSharedPtr<FJsonObject>)> BeforeSend;
+
+	/** Checks the options and starts. Returns false and logs why when an option is wrong. */
+	bool Init(const FManalensConfig& InConfig);
+
+	/** Record a named event with scalar properties (strings, numbers, booleans, or null). */
+	void Track(const FString& Event, const TSharedPtr<FJsonObject>& Properties = nullptr);
+	/** Attach a known player ID (1 to 255 characters) and traits to this install. */
+	void Identify(const FString& UserId, const TSharedPtr<FJsonObject>& Traits = nullptr);
+	/** Record an error event. Extra holds more scalar properties. */
+	void TrackError(const FString& Message, const FManalensErrorOptions& Options = FManalensErrorOptions(), const TSharedPtr<FJsonObject>& Extra = nullptr);
+	/** An error from the engine log (UE_LOG with Error verbosity). Counts toward MaxAutoErrorsPerSession. */
+	void TrackLogError(const FString& Category, const FString& Message, bool bWarning);
+	/** true starts the identity and sends game_open. false deletes the ID, the session, and every queued event. */
+	void SetConsent(bool bGranted);
+	/** Ends the session, clears the user ID, makes a new anonymous ID, and starts a new session. */
+	void Reset();
+	/** Sends one batch now, unless a request is in flight or the backoff wait is not over. */
+	void Flush();
+	/** Call often (each frame). Sends on the flush interval and when a send was requested. */
+	void Update();
+	/** The game lost or got focus (or went to the background). */
+	void SetFocused(bool bFocused);
+	/** Quit: ends the session, saves, clears the backoff, and starts a send. Then wait for IsSending() to become false. */
+	void BeginShutdown();
+	/** A normal exit: marks the saved session as exited (not a crash) and saves the queue. */
+	void FinishShutdown();
+	/** Adds mana_hid=<anonymous ID>.<unix seconds> to a website URL. Before consent the URL is unchanged. */
+	FString LinkUrl(const FString& Url) const;
+	/** Change the collector URL. */
+	void SetEndpoint(const FString& InEndpoint);
+
+	bool IsInitialized() const { return bInitialized; }
+	bool IsIdentityActive() const { return bIdentityActive; }
+	bool IsSending() const { return bSending; }
+	int32 GetQueueSize() const { return Queue.Num(); }
+	double GetBackoffUntil() const { return BackoffUntil; }
+	const FString& GetAnonymousId() const { return AnonymousId; }
+	const FString& GetSessionId() const { return SessionId; }
+	const FString& GetUserId() const { return UserId; }
+	const FManalensConfig& GetConfig() const { return Config; }
+	/** The JSON of each queued event, oldest first. */
+	TArray<FString> GetQueuedEvents() const;
+
+	// Pure helpers (public for the tests) ------------------------------------
+
+	/** A random RFC 4122 version 4 UUID, lower case. */
+	static FString NewUuidV4();
+	static bool IsUuidV4(const FString& Value);
+	/** Why the value cannot be the Publishable key, or an empty string when it may be one. */
+	static FString PublishableKeyRefusal(const FString& Key);
+	/** The 8-character base62 CRC32 checksum of prefix and body (packages/shared/src/keys.ts). */
+	static FString KeyChecksum(const FString& PrefixAndBody);
+	static EManalensSendOutcome ClassifyStatus(int32 Status);
+	/** Seconds to wait from a Retry-After header (seconds or an HTTP date). 0 when absent or not valid. */
+	static double ParseRetryAfter(const FString& Header, double NowUnix);
+	/** Groups errors as the Godot and Unity SDKs do: 16 hex characters of SHA-1. */
+	static FString Fingerprint(const FString& ErrorType, const FString& Message, const FString& File, const FString& Function);
+	/** ISO 8601 UTC with milliseconds and Z, for example 2027-01-15T08:00:00.000Z. */
+	static FString FormatTimestamp(double Unix);
+	/** A JSON number: integers without a fraction, other values with the shortest exact form. */
+	static FString FormatNumber(double Value);
+	/** The platform of this build: windows, macos, linux, android, ios, or other. */
+	static FString BuildPlatform();
+	static const TArray<FString>& Storefronts();
+	static const TCHAR* SeverityName(EManalensSeverity Severity);
+	/**
+	 * A captured log line without personal data: home folders become ~, URLs lose
+	 * user:pass@, the query, and the fragment, emails become [email], and values
+	 * after key=, token=, secret=, password=, authorization:, or bearer, and runs
+	 * of 24 or more key characters, become [redacted].
+	 */
+	static FString CleanLogMessage(const FString& Message);
+	static FString CleanLogMessage(const FString& Message, const TArray<FString>& HomeDirs);
+	/** Log categories that are never captured: LogManalens, LogHttp, LogSlate, LogSteamShared, LogOnline*, and LogEOS*. */
+	static bool IsSkippedLogCategory(const FString& Category);
+
+private:
+	struct FQueueEntry
+	{
+		double At = 0.0;
+		FString MessageId;
+		FString Json;
+	};
+
+	bool IdentityAllowed() const;
+	void StartIdentity();
+	void StartSession(double At);
+	void EndSession(double At);
+	void Touch();
+	void Enqueue(const FString& Type, const FString& Event, const TSharedPtr<FJsonObject>& Properties, double At = -1.0, const TSharedPtr<FJsonObject>& Traits = nullptr);
+	void Prune();
+	void TrySend();
+	void OnResponse(const FManalensHttpResult& Result, const TSet<FString>& Ids);
+	void RecordError(const FString& Message, const FManalensErrorOptions& Options, const FString& Source, const TSharedPtr<FJsonObject>& Extra);
+	bool ErrorAllowed(const FString& FingerprintValue, bool bManual);
+	void ClearErrorHistory();
+	TSharedRef<FJsonObject> BuildContext() const;
+	TSharedRef<FJsonObject> Fit(const TSharedPtr<FJsonObject>& Values, const TCHAR* Field) const;
+	TSharedRef<FJsonObject> Scalars(const TSharedPtr<FJsonObject>& Values) const;
+	void RaiseSendFailed(int32 Status, int32 Dropped);
+
+	FString PathOf(const TCHAR* Name) const;
+	void LoadState();
+	void SaveState();
+	void SaveSession();
+	void LoadQueue();
+	void SaveQueue();
+	void WriteOptOut();
+	bool WriteAtomically(const FString& Path, const FString& Text) const;
+	void DefaultTransport(const FString& Url, const TArray<TPair<FString, FString>>& Headers, const FString& Body, FManalensSendDone Done);
+
+	FManalensConfig Config;
+	FString Url;
+	bool bInitialized = false;
+	bool bIdentityActive = false;
+	/** The state file exists but could not be read: record nothing and never overwrite it (until SetConsent(true)). */
+	bool bStateUnreadable = false;
+	/** SetConsent(false) could not write the opt-out marker: stay off and retry. */
+	bool bOptOutPending = false;
+	bool bSending = false;
+	bool bFlushRequested = false;
+	bool bQueueDirty = false;
+	bool bFocused = true;
+	TSharedPtr<FJsonObject> State;
+	TArray<FQueueEntry> Queue;
+	FString AnonymousId;
+	FString UserId;
+	FString SessionId;
+	double SessionStartedAt = 0.0;
+	double LastActivityAt = 0.0;
+	double NextTickAt = 0.0;
+	double BackoffUntil = 0.0;
+	int32 Failures = 0;
+	TOptional<TPair<FString, TSharedPtr<FJsonObject>>> DeferredIdentify;
+	TArray<FString> RecentEvents;
+	TMap<FString, double> ErrorSeen;
+	TArray<double> ErrorTimes;
+	int32 AutoErrors = 0;
+	int32 ErrorsDropped = 0;
+	/** Set to false on destruction, so a late HTTP callback does nothing. */
+	TSharedRef<bool, ESPMode::ThreadSafe> Alive;
+};

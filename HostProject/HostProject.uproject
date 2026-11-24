@@ -1,0 +1,16 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "A small host project to run the Manalens plugin tests. Tests/run-tests.sh copies the built plugin into Plugins.",
+	"Plugins": [
+		{
+			"Name": "Manalens",
+			"Enabled": true
+		},
+		{
+			"Name": "AndroidFileServer",
+			"Enabled": false
+		}
+	]
+}

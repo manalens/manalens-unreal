@@ -1,0 +1,9 @@
+# Build output
+Manalens/Binaries/
+Manalens/Intermediate/
+HostProject/Binaries/
+HostProject/Intermediate/
+HostProject/Saved/
+HostProject/DerivedDataCache/
+HostProject/Plugins/
+HostProject/Config/DefaultInput.ini
