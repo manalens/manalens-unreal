@@ -39,6 +39,7 @@ The other nodes are Identify, Set Consent, Flush, Track Error, Reset, and Link U
 | `HostProject/` | A small project that runs the automation tests. |
 | `Tests/run-tests.sh` | Builds the plugin with `RunUAT BuildPlugin` and runs the tests headless. |
 | `Tests/fixtures/` | The request bodies of the test scenario. They match the Unity SDK fixtures. |
+| `Tests/E2E/` | A small game module for the end-to-end test against a real collector. |
 
 ## Test
 
