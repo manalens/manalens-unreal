@@ -1136,9 +1136,53 @@ double FManalensClient::ParseRetryAfter(const FString& Header, double NowUnix)
 	return 0.0;
 }
 
+int32 FManalensClient::ParseRejected(const FString& Body, FString& OutCodes)
+{
+	OutCodes.Reset();
+	const int32 Key = Body.Find(TEXT("\"rejected\""), ESearchCase::CaseSensitive);
+	if (Key == INDEX_NONE)
+	{
+		return 0;
+	}
+	int32 Index = Key + 10;
+	while (Index < Body.Len() && (Body[Index] == TEXT(' ') || Body[Index] == TEXT(':')))
+	{
+		++Index;
+	}
+	int32 End = Index;
+	while (End < Body.Len() && FChar::IsDigit(Body[End]))
+	{
+		++End;
+	}
+	if (End == Index || End - Index > 9)
+	{
+		return 0;
+	}
+	const int32 Rejected = FCString::Atoi(*Body.Mid(Index, End - Index));
+	if (const TSharedPtr<FJsonObject> Parsed = FromJson(Body))
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Errors = nullptr;
+		if (Parsed->TryGetArrayField(TEXT("errors"), Errors))
+		{
+			TArray<FString> Codes;
+			for (const TSharedPtr<FJsonValue>& Item : *Errors)
+			{
+				const TSharedPtr<FJsonObject>* ItemObject = nullptr;
+				FString ItemCode;
+				if (Item.IsValid() && Item->TryGetObject(ItemObject) && (*ItemObject)->TryGetStringField(TEXT("code"), ItemCode))
+				{
+					Codes.AddUnique(ItemCode);
+				}
+			}
+			OutCodes = FString::Join(Codes, TEXT(", "));
+		}
+	}
+	return Rejected;
+}
+
 void FManalensClient::OnResponse(const FManalensHttpResult& Result, const TSet<FString>& Ids)
 {
-	const int32 Count = Ids.Num();
+	int32 Count = Ids.Num();
 	const EManalensSendOutcome Outcome = ClassifyStatus(Result.Status);
 	if (Outcome != EManalensSendOutcome::Retry)
 	{
@@ -1182,6 +1226,19 @@ void FManalensClient::OnResponse(const FManalensHttpResult& Result, const TSet<F
 			}
 			UE_LOG(LogManalens, Warning, TEXT("Manalens: the collector refused %d events (HTTP %d)%s; they are dropped"), Count, Result.Status, *Reason.Left(300));
 			RaiseSendFailed(Result.Status, Count);
+		}
+		else
+		{
+			// An accepted batch can still list refused events (P-2787). They are
+			// not sent again: the same events would be refused again.
+			FString Codes;
+			const int32 Dropped = FMath::Min(Count, ParseRejected(Result.Body, Codes));
+			if (Dropped > 0)
+			{
+				UE_LOG(LogManalens, Warning, TEXT("Manalens: the collector refused %d of %d events (HTTP %d)%s; they are dropped"), Dropped, Count, Result.Status, Codes.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" (%s)"), *Codes.Left(300)));
+				RaiseSendFailed(Result.Status, Dropped);
+				Count -= Dropped;
+			}
 		}
 	}
 	else

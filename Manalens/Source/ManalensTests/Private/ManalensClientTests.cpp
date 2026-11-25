@@ -651,6 +651,14 @@ bool FManalensRetryTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("no Retry-After"), FManalensClient::ParseRetryAfter(TEXT(""), 0.0), 0.0);
 	TestEqual(TEXT("bad Retry-After"), FManalensClient::ParseRetryAfter(TEXT("soon"), 0.0), 0.0);
 	TestEqual(TEXT("Retry-After date"), FManalensClient::ParseRetryAfter(TEXT("Fri, 15 Jan 2027 08:01:00 GMT"), UnixOf(2027, 1, 15, 8, 0, 0)), 60.0);
+	// P-2787: the refused events of an accepted batch.
+	FString RejectedCodes;
+	TestEqual(TEXT("rejected count"), FManalensClient::ParseRejected(TEXT("{\"accepted\":1,\"rejected\":2,\"errors\":[{\"index\":1,\"code\":\"INVALID_EVENT\"},{\"index\":2,\"code\":\"SESSION_ID_REQUIRED\"}]}"), RejectedCodes), 2);
+	TestEqual(TEXT("rejected codes"), RejectedCodes, FString(TEXT("INVALID_EVENT, SESSION_ID_REQUIRED")));
+	TestEqual(TEXT("rejected count in a cut body"), FManalensClient::ParseRejected(TEXT("{\"accepted\":1,\"rejected\": 60,\"errors\":[{\"index\":1,\"co"), RejectedCodes), 60);
+	TestTrue(TEXT("no codes from a cut body"), RejectedCodes.IsEmpty());
+	TestEqual(TEXT("older collector body"), FManalensClient::ParseRejected(TEXT("{\"accepted\":1}"), RejectedCodes), 0);
+	TestEqual(TEXT("not JSON"), FManalensClient::ParseRejected(TEXT("<html>"), RejectedCodes), 0);
 
 	FHarness H;
 	H.Status = 503;

@@ -163,6 +163,12 @@ public:
 	static EManalensSendOutcome ClassifyStatus(int32 Status);
 	/** Seconds to wait from a Retry-After header (seconds or an HTTP date). 0 when absent or not valid. */
 	static double ParseRetryAfter(const FString& Header, double NowUnix);
+	/**
+	 * The refused events of an accepted batch (P-2787): the "rejected" count, and
+	 * the reason codes of "errors" in OutCodes. 0 when the body has no count. The
+	 * count is read from the text, so it works on a body cut at 4096 characters.
+	 */
+	static int32 ParseRejected(const FString& Body, FString& OutCodes);
 	/** Groups errors as the Godot and Unity SDKs do: 16 hex characters of SHA-1. */
 	static FString Fingerprint(const FString& ErrorType, const FString& Message, const FString& File, const FString& Function);
 	/** ISO 8601 UTC with milliseconds and Z, for example 2027-01-15T08:00:00.000Z. */
