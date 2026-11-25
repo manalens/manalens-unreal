@@ -10,7 +10,7 @@ It uses only engine modules (Core, CoreUObject, Engine, HTTP, Json, and Develope
 2. Open the project and let the editor build the plugin. A Blueprint-only project needs one C++ class first (**Tools > New C++ Class**).
 3. Open **Edit > Project Settings > Plugins > Manalens** and set the **Publishable Key** and the **Endpoint**.
 
-The engine starts the SDK with the game instance. It is off in the editor unless you turn on **Enabled In Editor**, so Play in Editor runs stay out of your reports.
+The engine starts the SDK with the game instance. It is off in the editor until you turn on **Enabled In Editor**. Turn it on to watch your events in Activity and Live View while you play. Dev and live data go to the same project: to tell test builds apart, set **Build** (for example `dev`) and filter by it.
 
 ## Track events
 
