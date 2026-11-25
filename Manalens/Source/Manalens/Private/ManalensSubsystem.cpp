@@ -104,7 +104,7 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	{
 		GConfig->GetString(TEXT("/Script/EngineSettings.GeneralProjectSettings"), TEXT("ProjectVersion"), Config.AppVersion, GGameIni);
 	}
-	Config.Build = Settings->Build;
+	Config.Build = GIsEditor && !Settings->EditorBuild.IsEmpty() ? Settings->EditorBuild : Settings->Build;
 	Config.Storefront = UManalensSettings::StorefrontValue(Settings->Storefront);
 	Config.bConsentRequired = Settings->bConsentRequired;
 	Config.bDebug = Settings->bDebug;

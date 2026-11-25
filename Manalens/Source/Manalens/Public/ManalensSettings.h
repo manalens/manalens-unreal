@@ -43,6 +43,10 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Build")
 	FString Build;
 
+	/** The build label of Play in Editor runs, so you can filter them out. Empty: use Build. A packaged build and a -game run use Build. */
+	UPROPERTY(config, EditAnywhere, Category = "Build")
+	FString EditorBuild = TEXT("dev");
+
 	/** The store this build is sold on. */
 	UPROPERTY(config, EditAnywhere, Category = "Build")
 	EManalensStorefront Storefront = EManalensStorefront::None;
