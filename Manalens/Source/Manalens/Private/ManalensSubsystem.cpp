@@ -30,8 +30,9 @@ public:
 		bool bWarning = false;
 	};
 
-	explicit FManalensLogCapture(bool bInWarnings)
+	FManalensLogCapture(bool bInWarnings, bool bInSkipEditorCategories)
 		: bWarnings(bInWarnings)
+		, bSkipEditorCategories(bInSkipEditorCategories)
 	{
 	}
 
@@ -45,6 +46,11 @@ public:
 		}
 		// Skip the SDK's own lines (a loop), failed sends, and online and platform services.
 		if (FManalensClient::IsSkippedLogCategory(Category.ToString()))
+		{
+			return;
+		}
+		// Play In Editor: the editor's own errors are in the same log, not the game's.
+		if (bSkipEditorCategories && FManalensClient::IsEditorLogCategory(Category.ToString()))
 		{
 			return;
 		}
@@ -71,6 +77,7 @@ public:
 
 private:
 	bool bWarnings = false;
+	bool bSkipEditorCategories = false;
 	FCriticalSection Mutex;
 	TArray<FItem> Pending;
 };
@@ -138,7 +145,7 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	if (Settings->bCaptureLogErrors && GLog)
 	{
-		LogCapture = MakeShared<FManalensLogCapture>(Settings->bCaptureLogWarnings);
+		LogCapture = MakeShared<FManalensLogCapture>(Settings->bCaptureLogWarnings, GIsEditor);
 		GLog->AddOutputDevice(LogCapture.Get());
 	}
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &UManalensSubsystem::OnTick), 0.0f);

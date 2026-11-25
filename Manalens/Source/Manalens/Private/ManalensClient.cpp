@@ -344,6 +344,28 @@ bool FManalensClient::IsSkippedLogCategory(const FString& Category)
 		|| Category.StartsWith(TEXT("LogOnline"), ESearchCase::CaseSensitive) || Category.StartsWith(TEXT("LogEOS"), ESearchCase::CaseSensitive);
 }
 
+bool FManalensClient::IsEditorLogCategory(const FString& Category)
+{
+	// Exact names: LogBlueprint is the compiler; LogBlueprintUserMessages (Print String) and
+	// LogScript (Accessed None) are the game's own Blueprint messages and stay captured.
+	static const TCHAR* Names[] = {
+		TEXT("LogBlueprint"), TEXT("LogK2Compiler"), TEXT("LogKismetCompiler"), TEXT("LogUnrealEd"),
+		TEXT("LogAssetTools"), TEXT("LogContentBrowser"), TEXT("LogDerivedDataCache"), TEXT("LogSourceControl"),
+		TEXT("LogShaderCompilers"), TEXT("LogPython"), TEXT("LogLiveCoding"), TEXT("LogDirectoryWatcher"),
+		TEXT("LogSavePackage"), TEXT("LogMaterialEditor"), TEXT("LogPlayLevel"),
+	};
+	for (const TCHAR* Name : Names)
+	{
+		if (Category == Name)
+		{
+			return true;
+		}
+	}
+	return Category.StartsWith(TEXT("LogEditor"), ESearchCase::CaseSensitive)
+		|| Category.StartsWith(TEXT("LogCook"), ESearchCase::CaseSensitive)
+		|| Category.StartsWith(TEXT("LogAutomation"), ESearchCase::CaseSensitive);
+}
+
 namespace ManalensClean
 {
 	bool IsAsciiAlnum(TCHAR C) { return (C >= TEXT('a') && C <= TEXT('z')) || (C >= TEXT('A') && C <= TEXT('Z')) || (C >= TEXT('0') && C <= TEXT('9')); }

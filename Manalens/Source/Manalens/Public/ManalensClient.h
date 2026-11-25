@@ -189,6 +189,12 @@ public:
 	static FString CleanLogMessage(const FString& Message, const TArray<FString>& HomeDirs);
 	/** Log categories that are never captured: LogManalens, LogHttp, LogSlate, LogSteamShared, LogOnline*, and LogEOS*. */
 	static bool IsSkippedLogCategory(const FString& Category);
+	/**
+	 * Log categories of editor modules (Blueprint compiler, shader compiler, DDC, source
+	 * control, editor tools). The editor runs them in the same process as Play In Editor,
+	 * so the log capture skips them in the editor (P-2792). A packaged game has none of them.
+	 */
+	static bool IsEditorLogCategory(const FString& Category);
 
 private:
 	struct FQueueEntry

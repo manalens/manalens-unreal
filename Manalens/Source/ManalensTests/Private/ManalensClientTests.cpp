@@ -1045,4 +1045,22 @@ bool FManalensSkippedCategoriesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensEditorCategoriesTest, "Manalens.Errors.EditorLogCategories", Flags)
+bool FManalensEditorCategoriesTest::RunTest(const FString& Parameters)
+{
+	// Seen in a real Play In Editor session (P-2792): these were sent as game errors.
+	for (const TCHAR* Category : { TEXT("LogBlueprint"), TEXT("LogEditor"), TEXT("LogEditorViewport"), TEXT("LogUnrealEd"), TEXT("LogAssetTools"),
+		TEXT("LogContentBrowser"), TEXT("LogDerivedDataCache"), TEXT("LogSourceControl"), TEXT("LogShaderCompilers"), TEXT("LogPython"),
+		TEXT("LogLiveCoding"), TEXT("LogCook"), TEXT("LogAutomationController") })
+	{
+		TestTrue(FString::Printf(TEXT("%s is an editor category"), Category), FManalensClient::IsEditorLogCategory(Category));
+	}
+	// The game's own messages, also those of Blueprints, stay captured.
+	for (const TCHAR* Category : { TEXT("LogTemp"), TEXT("LogScript"), TEXT("LogBlueprintUserMessages"), TEXT("LogStreaming"), TEXT("LogNet"), TEXT("LogAudio") })
+	{
+		TestFalse(FString::Printf(TEXT("%s is not an editor category"), Category), FManalensClient::IsEditorLogCategory(Category));
+	}
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

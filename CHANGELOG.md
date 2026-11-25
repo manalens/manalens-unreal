@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Play In Editor: errors of the editor itself are no longer sent as game errors. The editor logs in the same process as the game, so a real Play In Editor session sent `error` events for `LogBlueprint`, `LogEditor`, `LogShaderCompilers`, `LogDerivedDataCache`, `LogSourceControl` and other editor categories. In the editor, the log capture now skips the categories of editor modules (`FManalensClient::IsEditorLogCategory`). A packaged game is not changed (P-2792).
+
 ## 0.1.0 (unreleased)
 
 First version. Same behavior and wire format as the Godot SDK and the Unity SDK 0.1.0:
