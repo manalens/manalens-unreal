@@ -31,9 +31,9 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Project")
 	bool bEnabled = true;
 
-	/** Send events from the editor (Play in Editor). Off by default, so editor runs stay out of your reports. */
+	/** Send events from the editor (Play in Editor). On by default: editor and live data go to the same project, so set Build (for example "dev") to tell them apart. */
 	UPROPERTY(config, EditAnywhere, Category = "Project")
-	bool bEnabledInEditor = false;
+	bool bEnabledInEditor = true;
 
 	/** Up to 32 characters, for example 1.4.0. Empty: the Project Version in Project Settings > Description. */
 	UPROPERTY(config, EditAnywhere, Category = "Build")
