@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Dedicated servers (G-2533): the SDK now starts on a dedicated server (`IsRunningDedicatedServer()`), but sends no `game_open`, `session_start`, `session_end`, or `app_unclean_exit`, and does not count as an install. Before, it stayed off there. It logs one line that says why. **Track** and **Identify** still work. The new setting **Track Server Builds** (default off, under Advanced) sends the automatic events from a dedicated server. New `FManalensConfig::bServerBuild` and `bTrackServerBuilds`. Commandlets still do not start the SDK. See the new docs page "Multiplayer and dedicated servers".
+
 ## 0.1.4 (2026-11-26)
 
 - Each request sends `sent_at`, the device clock at the time of the send. The collector uses it to correct the event times, so a device clock that is fast or slow no longer gives wrong times or refused events (P-2799).

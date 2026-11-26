@@ -611,6 +611,53 @@ bool FManalensInstallKillTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensServerBuildTest, "Manalens.Session.ServerBuild", Flags)
+bool FManalensServerBuildTest::RunTest(const FString& Parameters)
+{
+	// G-2533: a dedicated server is not a player. Two launches: the first ends
+	// without a quit (a crash), the second quits.
+	const TArray<FString> Automatic = { TEXT("game_open"), TEXT("session_start"), TEXT("session_end"), TEXT("app_unclean_exit") };
+	for (const bool bTrack : { false, true })
+	{
+		FHarness H;
+		H.bHold = true; // Keep everything in the queue.
+		FManalensConfig Config = H.Config();
+		Config.bServerBuild = true;
+		Config.bTrackServerBuilds = bTrack;
+		{
+			TSharedRef<FManalensClient> First = H.Start(Config);
+			First->Track(TEXT("match_end"));
+			// A tick saves the open session and the queue; then the process dies.
+			H.Time += Config.FlushIntervalSeconds + 1;
+			First->Update();
+		}
+		H.Time += 60;
+		TSharedRef<FManalensClient> Second = H.Start(Config);
+		Second->Identify(TEXT("player-7"));
+		Second->Track(TEXT("match_end"));
+		Second->BeginShutdown();
+		const TArray<FString> Q = Names(Queued(*Second));
+		const FString Label = bTrack ? TEXT("with bTrackServerBuilds") : TEXT("without bTrackServerBuilds");
+		for (const FString& Name : Automatic)
+		{
+			TestTrue(FString::Printf(TEXT("%s: %s %s"), *Label, *Name, bTrack ? TEXT("sent") : TEXT("not sent")), Q.Contains(Name) == bTrack);
+		}
+		TestEqual(FString::Printf(TEXT("%s: track and identify still work"), *Label), Q.FilterByPredicate([](const FString& N) { return N == TEXT("match_end") || N == TEXT("identify"); }).Num(), 3);
+		if (!bTrack)
+		{
+			TestEqual(TEXT("only the manual events"), FString::Join(Q, TEXT(",")), FString(TEXT("match_end,identify,match_end")));
+			for (const TSharedPtr<FJsonObject>& Event : Queued(*Second))
+			{
+				TestFalse(TEXT("an anonymous ID"), Event->GetStringField(TEXT("anonymous_id")).IsEmpty());
+				TestFalse(TEXT("a session ID"), Event->GetStringField(TEXT("session_id")).IsEmpty());
+			}
+		}
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensShutdownTickTest, "Manalens.Session.NoNewSessionWhileShuttingDown", Flags)
 bool FManalensShutdownTickTest::RunTest(const FString& Parameters)
 {

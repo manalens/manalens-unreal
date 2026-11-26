@@ -245,6 +245,11 @@ bool FManalensClient::Init(const FManalensConfig& InConfig)
 	IFileManager::Get().MakeDirectory(*Config.StorageDir, true);
 	SetEndpoint(Config.Endpoint);
 	bInitialized = true;
+	bServerQuiet = Config.bServerBuild && !Config.bTrackServerBuilds;
+	if (bServerQuiet)
+	{
+		UE_LOG(LogManalens, Log, TEXT("Manalens: dedicated server; no game_open, session, or unclean exit events. Turn on Track Server Builds to send them"));
+	}
 	LoadState();
 	NextTickAt = Now() + Config.FlushIntervalSeconds;
 	if (IdentityAllowed())
@@ -970,7 +975,7 @@ void FManalensClient::StartIdentity()
 		Session->TryGetBoolField(TEXT("focused"), bWasFocused);
 		// No normal exit and the game had focus: count it as a crash. A game the
 		// OS closed in the background is not a crash.
-		if (!bExited && bWasFocused)
+		if (!bServerQuiet && !bExited && bWasFocused)
 		{
 			TSharedPtr<FJsonObject> Crash = MakeShared<FJsonObject>();
 			Crash->SetStringField(TEXT("previous_session_id"), PreviousId);
@@ -992,7 +997,10 @@ void FManalensClient::StartIdentity()
 	FString FirstOpenAt = FormatTimestamp(At);
 	State->TryGetStringField(TEXT("first_open_at"), FirstOpenAt);
 	Open->SetStringField(TEXT("first_open_at"), FirstOpenAt);
-	Enqueue(TEXT("track"), TEXT("game_open"), Open);
+	if (!bServerQuiet)
+	{
+		Enqueue(TEXT("track"), TEXT("game_open"), Open);
+	}
 	SaveState();
 	// Write game_open (the install signal) and app_unclean_exit to disk before
 	// any send: a process killed before the next save would lose them.
@@ -1014,7 +1022,10 @@ void FManalensClient::StartSession(double At)
 	LastActivityAt = At;
 	AutoErrors = 0;
 	SaveSession();
-	Enqueue(TEXT("track"), TEXT("session_start"), nullptr, At);
+	if (!bServerQuiet)
+	{
+		Enqueue(TEXT("track"), TEXT("session_start"), nullptr, At);
+	}
 }
 
 void FManalensClient::EndSession(double At)
@@ -1030,7 +1041,10 @@ void FManalensClient::EndSession(double At)
 		Ended->SetField(TEXT("errors_dropped"), Number(ErrorsDropped));
 		ErrorsDropped = 0;
 	}
-	Enqueue(TEXT("track"), TEXT("session_end"), Ended, At);
+	if (!bServerQuiet)
+	{
+		Enqueue(TEXT("track"), TEXT("session_end"), Ended, At);
+	}
 	SessionId.Reset();
 	State->RemoveField(TEXT("session"));
 	SaveState();

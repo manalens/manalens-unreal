@@ -83,6 +83,14 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Advanced", meta = (ClampMin = "0", ClampMax = "10"))
 	float QuitTimeoutSeconds = 2.0f;
 
+	/**
+	 * A dedicated server is not a player. Off: a dedicated server sends no
+	 * game_open, sessions, or unclean exits, and is not counted as an install.
+	 * Track and Identify still work. On: it sends them as a client does.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Advanced")
+	bool bTrackServerBuilds = false;
+
 	/** Log each queued event and each failed send. */
 	UPROPERTY(config, EditAnywhere, Category = "Advanced")
 	bool bDebug = false;

@@ -37,6 +37,15 @@ struct MANALENS_API FManalensConfig
 	FString Locale;
 	/** Minutes from UTC (480 for UTC+8). MAX_int32: read the system clock. Out of -720 to 840: not sent. */
 	int32 UtcOffsetMinutes = MAX_int32;
+	/** true in a dedicated server (UManalensSubsystem: IsRunningDedicatedServer()). */
+	bool bServerBuild = false;
+	/**
+	 * A dedicated server is not a player. false (default): on a server build the
+	 * client sends no game_open, session_start, session_end, or app_unclean_exit,
+	 * so the server does not count as an install or a session. Track() and
+	 * Identify() still work. true: a server build sends them as a client does.
+	 */
+	bool bTrackServerBuilds = false;
 };
 
 /** The result of one HTTP request. Status 0 is a network error. */
@@ -247,6 +256,8 @@ private:
 	FString Url;
 	bool bInitialized = false;
 	bool bIdentityActive = false;
+	/** A server build without bTrackServerBuilds: no automatic client events. */
+	bool bServerQuiet = false;
 	/** The state file exists but could not be read: record nothing and never overwrite it (until SetConsent(true)). */
 	bool bStateUnreadable = false;
 	/** SetConsent(false) could not write the opt-out marker: stay off and retry. */

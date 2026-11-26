@@ -98,9 +98,9 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		}
 		return;
 	}
-	if (IsRunningDedicatedServer() || IsRunningCommandlet())
+	if (IsRunningCommandlet())
 	{
-		return; // Player analytics only: a dedicated server is not a player.
+		return; // A commandlet (cook, build) is not a game.
 	}
 
 	FManalensConfig Config;
@@ -115,6 +115,9 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Config.Storefront = UManalensSettings::StorefrontValue(Settings->Storefront);
 	Config.bConsentRequired = Settings->bConsentRequired;
 	Config.bDebug = Settings->bDebug;
+	// A dedicated server keeps Track() and Identify(), without the client events.
+	Config.bServerBuild = IsRunningDedicatedServer();
+	Config.bTrackServerBuilds = Settings->bTrackServerBuilds;
 	Config.FlushIntervalSeconds = Settings->FlushIntervalSeconds;
 	Config.FlushAt = Settings->FlushAt;
 	Config.MaxQueue = Settings->MaxQueue;
