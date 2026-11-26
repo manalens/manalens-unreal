@@ -74,3 +74,4 @@ struct MANALENS_API FManalensErrorOptions
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FManalensSendFailed, int32, Status, int32, Dropped);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FManalensFlushed, int32, Sent, bool, bOk);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FManalensSteamLinked, bool, bLinked, int32, Status, const FString&, Code);

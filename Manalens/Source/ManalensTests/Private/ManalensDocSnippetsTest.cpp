@@ -25,6 +25,14 @@ namespace ManalensDocSnippets
 		Manalens->Identify(TEXT("player_42"), { { TEXT("plan"), TEXT("supporter") } }, {}, {});
 		Manalens->Reset(); // on sign out
 
+		// Traits
+		Manalens->Traits({ { TEXT("difficulty"), TEXT("hard") } }, { { TEXT("level"), 3 } }, {});
+
+		// Verify Steam ownership: the bytes of a Web API ticket with the identity "manalens"
+		TArray<uint8> TicketBytes;
+		TicketBytes.Init(7, 20);
+		Manalens->LinkSteamTicket(TicketBytes);
+
 		// Open your website from the game
 		if (bOpenUrl)
 		{

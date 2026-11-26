@@ -17,6 +17,8 @@ struct MANALENS_API FManalensConfig
 	FString PublishableKey;
 	/** The Manalens ingest URL, without /v0/events. */
 	FString Endpoint;
+	/** The API URL of LinkSteamTicket(). Empty: the Endpoint with an events. host changed to api. (https://events.manalens.dev gives https://api.manalens.dev); another endpoint is used as it is. */
+	FString ApiEndpoint;
 	FString AppVersion;
 	FString Build;
 	/** steam, itch, epic, gog, app_store, play, psn, xbox, nintendo, other, or empty. */
@@ -99,6 +101,12 @@ public:
 	static constexpr const TCHAR* StateFileName = TEXT("manalens_state.json");
 	static constexpr const TCHAR* QueueFileName = TEXT("manalens_queue.txt");
 	static constexpr const TCHAR* OptOutFileName = TEXT("manalens_optout");
+	/** LinkSteamTicket(): the identity of the Steam Web API ticket. The server accepts only this one. */
+	static constexpr const TCHAR* SteamTicketIdentity = TEXT("manalens");
+	/** LinkSteamTicket() waits for a 429 Retry-After of at most this many seconds, once. */
+	static constexpr double LinkMaxRetryAfterSeconds = 60.0;
+	/** Protected traits (P-2814): only a server with the secret key may set them. Traits() does not send them. */
+	static const TArray<FString>& ProtectedTraits();
 
 	FManalensClient();
 	~FManalensClient();
@@ -116,8 +124,15 @@ public:
 	/** After each response. bOk is false for a network error or a retried status. */
 	TFunction<void(int32 /*Sent*/, bool /*bOk*/)> OnFlushed;
 	/**
+	 * The answer to LinkSteamTicket() (P-2815): bLinked, the HTTP status (0 when no
+	 * request was made or the network failed), and the API error code (for example
+	 * STEAM_TICKET_INVALID or STEAM_NOT_CONNECTED) or NETWORK_ERROR,
+	 * CONSENT_REQUIRED, or IDENTITY_CHANGED. Empty on success.
+	 */
+	TFunction<void(bool /*bLinked*/, int32 /*Status*/, const FString& /*Code*/)> OnSteamLinked;
+	/**
 	 * Gets a copy of each event before it is queued: track events (also error and the
-	 * automatic events such as session_start), and identify. Fields: type, event,
+	 * automatic events such as session_start), identify, and traits. Fields: type, event,
 	 * properties, traits, user_id, message_id, anonymous_id, session_id, context, ...
 	 * Return the event to send (changed or not), or nullptr to drop it. The SDK takes
 	 * event, properties, traits, and user_id from the result and keeps the other fields.
@@ -134,6 +149,29 @@ public:
 	void Track(const FString& Event, const TSharedPtr<FJsonObject>& Properties = nullptr);
 	/** Attach a known player ID (1 to 255 characters) and traits to this install. */
 	void Identify(const FString& UserId, const TSharedPtr<FJsonObject>& Traits = nullptr);
+	/**
+	 * Set traits on this player, with or without a user ID (P-2814). Before Identify()
+	 * they belong to this install's anonymous ID; after it, to the user. Scalars only;
+	 * null clears a trait. At most 50 keys and 8 KB. Waits for consent: calls before
+	 * consent are merged and sent then. Protected traits (email, itch_user_id,
+	 * stripe_customer_id, paddle_customer_id) are not sent (one warning).
+	 */
+	void Traits(const TSharedPtr<FJsonObject>& Traits);
+	/**
+	 * Verify the Steam account of this player (P-2815). Pass the bytes of a Steam Web API
+	 * ticket made with the identity "manalens" (GetAuthTicketForWebApi("manalens"), 16 to
+	 * 2048 bytes). The request goes out from Update() after consent, to ApiEndpoint
+	 * /v0/link. The answer comes in OnSteamLinked. A refused ticket is not sent again; a
+	 * 429 with Retry-After (60 s or less) is tried once more, but not after
+	 * SetConsent(false) or Reset() during the wait.
+	 */
+	void LinkSteamTicket(const TArray<uint8>& Ticket);
+	/** LinkSteamTicket() with the ticket as a hex string (32 to 4096 hex characters). */
+	void LinkSteamTicketHex(const FString& TicketHex);
+	/** The URL of LinkSteamTicket(). */
+	const FString& GetLinkUrl() const { return LinkUrlValue; }
+	/** true while a link waits for Update() or consent, runs, or waits for its retry. */
+	bool IsLinking() const { return bLinkInFlight || !PendingLinkTicket.IsEmpty(); }
 	/** Record an error event. Extra holds more scalar properties. */
 	void TrackError(const FString& Message, const FManalensErrorOptions& Options = FManalensErrorOptions(), const TSharedPtr<FJsonObject>& Extra = nullptr);
 	/** An error from the engine log (UE_LOG with Error verbosity). Counts toward MaxAutoErrorsPerSession. */
@@ -243,6 +281,11 @@ private:
 	TSharedRef<FJsonObject> Fit(const TSharedPtr<FJsonObject>& Values, const TCHAR* Field) const;
 	TSharedRef<FJsonObject> Scalars(const TSharedPtr<FJsonObject>& Values) const;
 	void RaiseSendFailed(int32 Status, int32 Dropped);
+	void SendTraits(const TSharedRef<FJsonObject>& Values);
+	void UpdateLink();
+	void SendLink();
+	void OnLinkResponse(const FManalensHttpResult& Result);
+	void FinishLink(bool bLinked, int32 Status, const FString& Code);
 
 	FString PathOf(const TCHAR* Name) const;
 	void LoadState();
@@ -279,6 +322,18 @@ private:
 	double BackoffUntil = 0.0;
 	int32 Failures = 0;
 	TOptional<TPair<FString, TSharedPtr<FJsonObject>>> DeferredIdentify;
+	/** Traits() before consent, merged. */
+	TSharedPtr<FJsonObject> HeldTraits;
+	bool bWarnedProtectedTraits = false;
+	FString LinkUrlValue;
+	/** A Steam ticket (hex) that waits for consent or Update(). */
+	FString PendingLinkTicket;
+	/** The body of the link request in flight or waiting for its retry, and its anonymous ID. */
+	FString LinkBody;
+	FString LinkAnonymousId;
+	bool bLinkInFlight = false;
+	int32 LinkAttempt = 0;
+	double LinkRetryAt = -1.0;
 	TArray<FString> RecentEvents;
 	bool bInBeforeSend = false;
 	TMap<FString, double> ErrorSeen;

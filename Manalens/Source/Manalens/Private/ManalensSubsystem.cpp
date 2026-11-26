@@ -106,6 +106,7 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	FManalensConfig Config;
 	Config.PublishableKey = Settings->PublishableKey.TrimStartAndEnd();
 	Config.Endpoint = Settings->Endpoint.TrimStartAndEnd();
+	Config.ApiEndpoint = Settings->ApiEndpoint.TrimStartAndEnd();
 	Config.AppVersion = Settings->AppVersion;
 	if (Config.AppVersion.IsEmpty() && GConfig)
 	{
@@ -139,6 +140,13 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		if (WeakThis.IsValid())
 		{
 			WeakThis->OnFlushed.Broadcast(Sent, bOk);
+		}
+	};
+	Client->OnSteamLinked = [WeakThis](bool bLinked, int32 Status, const FString& Code)
+	{
+		if (WeakThis.IsValid())
+		{
+			WeakThis->OnSteamLinked.Broadcast(bLinked, Status, Code);
 		}
 	};
 	if (!Client->Init(Config))
@@ -317,6 +325,35 @@ void UManalensSubsystem::IdentifyJson(const FString& UserId, const TSharedPtr<FJ
 	if (Client.IsValid())
 	{
 		Client->Identify(UserId, Traits);
+	}
+}
+
+void UManalensSubsystem::Traits(const TMap<FString, FString>& Strings, const TMap<FString, double>& Numbers, const TMap<FString, bool>& Flags)
+{
+	TraitsJson(ToJson(Strings, Numbers, Flags));
+}
+
+void UManalensSubsystem::TraitsJson(const TSharedPtr<FJsonObject>& Traits)
+{
+	if (Client.IsValid())
+	{
+		Client->Traits(Traits);
+	}
+}
+
+void UManalensSubsystem::LinkSteamTicket(const TArray<uint8>& Ticket)
+{
+	if (Client.IsValid())
+	{
+		Client->LinkSteamTicket(Ticket);
+	}
+}
+
+void UManalensSubsystem::LinkSteamTicketHex(const FString& TicketHex)
+{
+	if (Client.IsValid())
+	{
+		Client->LinkSteamTicketHex(TicketHex);
 	}
 }
 

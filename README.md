@@ -27,11 +27,52 @@ if (UManalensSubsystem* Manalens = GetGameInstance()->GetSubsystem<UManalensSubs
 
 Add `"Manalens"` to the dependencies in the `Build.cs` file of your game module.
 
-The other nodes are Identify, Set Consent, Flush, Track Error, Reset, and Link URL. The full guide, with every setting, is in the [Unreal SDK docs](https://docs.manalens.dev/sdks/unreal).
+The other nodes are Identify, Traits, Link Steam Ticket, Set Consent, Flush, Track Error, Reset, and Link URL. The full guide, with every setting, is in the [Unreal SDK docs](https://docs.manalens.dev/sdks/unreal).
+
+## Traits
+
+**Traits** sets traits on this player. It needs no player ID: before **Identify**, the traits belong to this install's anonymous ID; after it, to the player.
+
+```cpp
+Manalens->Traits({ { TEXT("difficulty"), TEXT("hard") } }, { { TEXT("level"), 3 } }, {});
+```
+
+- At most 50 keys and 8 KB of JSON. `TraitsJson()` (C++) takes a JSON object, where a null value clears a trait.
+- The protected traits `email`, `itch_user_id`, `stripe_customer_id`, and `paddle_customer_id` are not sent (one warning). Only a server with the secret key can set them.
+- Like Identify, it waits for consent. Calls before consent are merged and sent then.
+
+## Verify Steam ownership
+
+**Link Steam Ticket** links the Steam account that runs the game to this install. Manalens checks a Steam ticket with Steam and reads which of your apps the account owns. The player does not sign in. See [Steam ownership](https://docs.manalens.dev/features/steam-ownership) and the [Link API](https://docs.manalens.dev/api/link).
+
+The plugin has no Steam dependency. Your game gets a Steam Web API ticket with the identity `manalens` and passes its bytes. With the Steamworks SDK (the `Steamworks` module of the engine):
+
+```cpp
+// After SteamAPI_Init(). Keep the callback object alive until it fires.
+STEAM_CALLBACK(AMyGameMode, OnWebApiTicket, GetTicketForWebApiResponse_t);
+
+SteamUser()->GetAuthTicketForWebApi("manalens");
+
+void AMyGameMode::OnWebApiTicket(GetTicketForWebApiResponse_t* Response)
+{
+    if (Response->m_eResult == k_EResultOK)
+    {
+        TArray<uint8> Ticket(Response->m_rgubTicket, Response->m_cubTicket);
+        GetGameInstance()->GetSubsystem<UManalensSubsystem>()->LinkSteamTicket(Ticket);
+    }
+}
+```
+
+With the Steam Online Subsystem, get a Web API ticket for the identity `manalens` from its auth interface, and pass the bytes (or the hex string to **Link Steam Ticket Hex**).
+
+- The request goes to `<Api Endpoint>/v0/link` after consent. **Api Endpoint** (Advanced) defaults to the Endpoint with `events.` changed to `api.`.
+- **On Steam Linked** (bLinked, Status, Code) gives the answer. `Code` is the API error code (for example `STEAM_TICKET_INVALID` or `STEAM_NOT_CONNECTED`), or `NETWORK_ERROR`, `CONSENT_REQUIRED`, or `IDENTITY_CHANGED`.
+- A refused ticket is not sent again. After a `429` with `Retry-After` (60 s or less), the plugin tries once more, but not after Set Consent (false) or Reset during the wait.
+- Say in your privacy notice that your game sends a Steam ticket to Manalens to confirm ownership.
 
 ## BeforeSend
 
-`SetBeforeSend()` (C++) gets a copy of each event (track, identify, error, automatic events) before it is queued. Return it (changed or not), or `nullptr` to drop it. The SDK takes `event`, `properties`, `traits`, and `user_id` from the result. If the result changes or removes `type`, `message_id`, `anonymous_id`, `session_id`, or `context.app`, the SDK sends the original event.
+`SetBeforeSend()` (C++) gets a copy of each event (track, identify, traits, error, automatic events) before it is queued. Return it (changed or not), or `nullptr` to drop it. The SDK takes `event`, `properties`, `traits`, and `user_id` from the result. If the result changes or removes `type`, `message_id`, `anonymous_id`, `session_id`, or `context.app`, the SDK sends the original event.
 
 ```cpp
 // Keep 10% of player_jump events (sampling).

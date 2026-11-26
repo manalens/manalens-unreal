@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- New **Traits** (`Traits()`, `TraitsJson()`, and `FManalensClient::Traits()`) (P-2814): set traits on this player, with or without a player ID. Before **Identify** the traits belong to the anonymous ID of this install. The protected traits `email`, `itch_user_id`, `stripe_customer_id`, and `paddle_customer_id` are not sent (one warning). Calls before consent are merged and sent after consent.
+- New **Link Steam Ticket** (`LinkSteamTicket(TArray<uint8>)`, `LinkSteamTicketHex(FString)`) and the **On Steam Linked** event (P-2815). The game passes a Steam Web API ticket with the identity `manalens` (from the Steamworks SDK or the Steam Online Subsystem); the plugin posts it to `/v0/link` on the API host (new **Api Endpoint** setting; default: the Endpoint with `events.` changed to `api.`) after consent, from the tick. No Steam module dependency. A refusal is not sent again; a `429` with `Retry-After` of 60 s or less is tried once more, but not after Set Consent (false) or Reset during the wait.
+- The shared fixture scenario has a `traits` event.
+
 ## 0.1.6 (2026-11-26)
 
 - Console values (P-2776). `context.app.platform` is now `ps5`, `xbox_series`, `xbox_one`, `switch`, or `switch2` in a console build (from `PLATFORM_PS5`, `PLATFORM_XSX`, `PLATFORM_XB1`, `PLATFORM_SWITCH`, and `PLATFORM_SWITCH2`), instead of `other`. New **Platform** setting (and `FManalensConfig::Platform` is now checked): empty detects the platform; set it when the plugin cannot name the console, in that platform's own `Game.ini`. A wrong value logs a warning and the build platform is used. The **Storefront** setting has PlayStation Store (`psn`), Microsoft Store on Xbox (`xbox`), and Nintendo eShop (`nintendo`).

@@ -277,6 +277,22 @@ void FManalensClient::SetEndpoint(const FString& InEndpoint)
 	}
 	Config.Endpoint = Base;
 	Url = Base + TEXT("/v0/events");
+	// The API host of LinkSteamTicket(): ApiEndpoint, or the endpoint with an events. host changed to api.
+	FString Api = Config.ApiEndpoint.TrimStartAndEnd();
+	if (Api.IsEmpty())
+	{
+		Api = Base;
+		const int32 Scheme = Api.Find(TEXT("://"));
+		if (Scheme != INDEX_NONE && Api.Mid(Scheme + 3).StartsWith(TEXT("events."), ESearchCase::IgnoreCase))
+		{
+			Api = Api.Left(Scheme + 3) + TEXT("api.") + Api.Mid(Scheme + 3 + 7);
+		}
+	}
+	while (Api.EndsWith(TEXT("/")))
+	{
+		Api.LeftChopInline(1);
+	}
+	LinkUrlValue = Api + TEXT("/v0/link");
 	BackoffUntil = 0.0;
 	Failures = 0;
 }
@@ -321,6 +337,202 @@ void FManalensClient::Identify(const FString& InUserId, const TSharedPtr<FJsonOb
 	Touch();
 	Enqueue(TEXT("identify"), FString(), nullptr, -1.0, Fit(Scalars(Traits), TEXT("traits")));
 	bFlushRequested = true;
+}
+
+const TArray<FString>& FManalensClient::ProtectedTraits()
+{
+	static const TArray<FString> Keys = { TEXT("email"), TEXT("itch_user_id"), TEXT("stripe_customer_id"), TEXT("paddle_customer_id") };
+	return Keys;
+}
+
+void FManalensClient::Traits(const TSharedPtr<FJsonObject>& InTraits)
+{
+	if (!bInitialized)
+	{
+		return;
+	}
+	TSharedPtr<FJsonObject> Kept = MakeShared<FJsonObject>();
+	TArray<FString> Dropped;
+	if (InTraits.IsValid())
+	{
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : InTraits->Values)
+		{
+			if (ProtectedTraits().Contains(Pair.Key))
+			{
+				Dropped.Add(Pair.Key);
+			}
+			else
+			{
+				Kept->SetField(Pair.Key, Pair.Value);
+			}
+		}
+	}
+	if (Dropped.Num() > 0 && !bWarnedProtectedTraits)
+	{
+		bWarnedProtectedTraits = true;
+		UE_LOG(LogManalens, Warning, TEXT("Manalens: Traits() does not send %s. Only a server with the secret key can set protected traits"), *FString::Join(Dropped, TEXT(", ")));
+	}
+	TSharedRef<FJsonObject> Values = Fit(Scalars(Kept), TEXT("traits"));
+	if (Values->Values.Num() == 0)
+	{
+		if (Dropped.Num() == 0)
+		{
+			UE_LOG(LogManalens, Warning, TEXT("Manalens: Traits() needs at least one trait"));
+		}
+		return;
+	}
+	if (!bIdentityActive)
+	{
+		// Sent after consent.
+		if (!HeldTraits.IsValid())
+		{
+			HeldTraits = MakeShared<FJsonObject>();
+		}
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Values->Values)
+		{
+			HeldTraits->SetField(Pair.Key, Pair.Value);
+		}
+		return;
+	}
+	SendTraits(Values);
+}
+
+void FManalensClient::SendTraits(const TSharedRef<FJsonObject>& Values)
+{
+	Touch();
+	Enqueue(TEXT("traits"), FString(), nullptr, -1.0, Values);
+}
+
+void FManalensClient::LinkSteamTicket(const TArray<uint8>& Ticket)
+{
+	if (!bInitialized)
+	{
+		return;
+	}
+	if (Ticket.Num() < 16 || Ticket.Num() > 2048)
+	{
+		UE_LOG(LogManalens, Warning, TEXT("Manalens: LinkSteamTicket() needs a ticket of 16 to 2048 bytes"));
+		return;
+	}
+	if (bLinkInFlight)
+	{
+		return;
+	}
+	PendingLinkTicket = BytesToHex(Ticket.GetData(), Ticket.Num()).ToLower();
+}
+
+void FManalensClient::LinkSteamTicketHex(const FString& TicketHex)
+{
+	const FString Hex = TicketHex.TrimStartAndEnd();
+	bool bHex = Hex.Len() >= 32 && Hex.Len() <= 4096 && Hex.Len() % 2 == 0;
+	for (int32 Index = 0; bHex && Index < Hex.Len(); ++Index)
+	{
+		bHex = FChar::IsHexDigit(Hex[Index]);
+	}
+	if (!bHex)
+	{
+		UE_LOG(LogManalens, Warning, TEXT("Manalens: LinkSteamTicketHex() needs 32 to 4096 hex characters, an even number"));
+		return;
+	}
+	TArray<uint8> Bytes;
+	Bytes.SetNumUninitialized(Hex.Len() / 2);
+	HexToBytes(Hex, Bytes.GetData());
+	LinkSteamTicket(Bytes);
+}
+
+void FManalensClient::UpdateLink()
+{
+	if (LinkRetryAt >= 0.0 && Now() >= LinkRetryAt)
+	{
+		LinkRetryAt = -1.0;
+		// The same gates as the first send: after SetConsent(false), an opt-out, or
+		// Reset(), the old ticket and ID are not sent again.
+		if (!bIdentityActive)
+		{
+			FinishLink(false, 0, TEXT("CONSENT_REQUIRED"));
+			return;
+		}
+		if (AnonymousId != LinkAnonymousId)
+		{
+			FinishLink(false, 0, TEXT("IDENTITY_CHANGED"));
+			return;
+		}
+		SendLink();
+		return;
+	}
+	if (PendingLinkTicket.IsEmpty() || bLinkInFlight || !bIdentityActive || AnonymousId.IsEmpty())
+	{
+		return;
+	}
+	LinkBody = FString::Printf(TEXT("{\"provider\":\"steam\",\"ticket\":\"%s\",\"anonymous_id\":\"%s\"}"), *PendingLinkTicket, *AnonymousId);
+	PendingLinkTicket.Reset();
+	LinkAnonymousId = AnonymousId;
+	LinkAttempt = 0;
+	bLinkInFlight = true;
+	SendLink();
+}
+
+void FManalensClient::SendLink()
+{
+	TArray<TPair<FString, FString>> Headers;
+	Headers.Emplace(TEXT("Content-Type"), TEXT("application/json"));
+	Headers.Emplace(TEXT("x-publishable-key"), Config.PublishableKey);
+	TWeakPtr<bool, ESPMode::ThreadSafe> WeakAlive = Alive;
+	TSharedRef<bool> bDone = MakeShared<bool>(false);
+	Transport(LinkUrlValue, Headers, LinkBody, [this, WeakAlive, bDone](const FManalensHttpResult& Result)
+	{
+		const TSharedPtr<bool, ESPMode::ThreadSafe> Pinned = WeakAlive.Pin();
+		if (!Pinned.IsValid() || !*Pinned || *bDone)
+		{
+			return;
+		}
+		*bDone = true;
+		OnLinkResponse(Result);
+	});
+}
+
+void FManalensClient::OnLinkResponse(const FManalensHttpResult& Result)
+{
+	if (Result.Status >= 200 && Result.Status < 300)
+	{
+		if (Config.bDebug)
+		{
+			UE_LOG(LogManalens, Log, TEXT("Manalens: Steam account linked"));
+		}
+		FinishLink(true, Result.Status, FString());
+		return;
+	}
+	if (Result.Status <= 0)
+	{
+		FinishLink(false, 0, TEXT("NETWORK_ERROR"));
+		return;
+	}
+	const double Wait = Result.RetryAfter.IsEmpty() ? -1.0 : ParseRetryAfter(Result.RetryAfter, Now());
+	if (Result.Status == 429 && LinkAttempt == 0 && Wait >= 0.0 && Wait <= LinkMaxRetryAfterSeconds)
+	{
+		LinkAttempt = 1;
+		LinkRetryAt = Now() + Wait;
+		return;
+	}
+	FString Code;
+	TSharedPtr<FJsonObject> Parsed;
+	const TSharedPtr<FJsonObject>* Error = nullptr;
+	if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Result.Body), Parsed) && Parsed.IsValid() && Parsed->TryGetObjectField(TEXT("error"), Error))
+	{
+		(*Error)->TryGetStringField(TEXT("code"), Code);
+	}
+	UE_LOG(LogManalens, Warning, TEXT("Manalens: LinkSteamTicket() failed (HTTP %d%s%s)"), Result.Status, Code.IsEmpty() ? TEXT("") : TEXT(" "), *Code);
+	FinishLink(false, Result.Status, Code);
+}
+
+void FManalensClient::FinishLink(bool bLinked, int32 Status, const FString& Code)
+{
+	bLinkInFlight = false;
+	LinkBody.Reset();
+	if (OnSteamLinked)
+	{
+		OnSteamLinked(bLinked, Status, Code);
+	}
 }
 
 void FManalensClient::TrackError(const FString& Message, const FManalensErrorOptions& Options, const TSharedPtr<FJsonObject>& Extra)
@@ -750,6 +962,8 @@ void FManalensClient::SetConsent(bool bGranted)
 	// Consent withdrawn: forget the player ID, the session, and every unsent event.
 	bIdentityActive = false;
 	DeferredIdentify.Reset();
+	HeldTraits.Reset();
+	PendingLinkTicket.Reset();
 	AnonymousId.Reset();
 	UserId.Reset();
 	SessionId.Reset();
@@ -776,6 +990,8 @@ void FManalensClient::ClearErrorHistory()
 
 void FManalensClient::Reset()
 {
+	HeldTraits.Reset();
+	PendingLinkTicket.Reset();
 	if (!bIdentityActive)
 	{
 		UserId.Reset();
@@ -835,6 +1051,7 @@ void FManalensClient::Update()
 	{
 		TrySend();
 	}
+	UpdateLink();
 }
 
 void FManalensClient::SetFocused(bool bInFocused)
@@ -1015,6 +1232,12 @@ void FManalensClient::StartIdentity()
 		const TPair<FString, TSharedPtr<FJsonObject>> Pending = DeferredIdentify.GetValue();
 		DeferredIdentify.Reset();
 		Identify(Pending.Key, Pending.Value);
+	}
+	if (HeldTraits.IsValid())
+	{
+		const TSharedRef<FJsonObject> Held = HeldTraits.ToSharedRef();
+		HeldTraits.Reset();
+		SendTraits(Held);
 	}
 	// Sent on the next Update(), so events of the first frame share the request.
 	bFlushRequested = true;

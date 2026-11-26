@@ -336,6 +336,7 @@ bool FManalensPayloadTest::RunTest(const FString& Parameters)
 			{ TEXT("flow"), Str(TEXT("source")) }, { TEXT("currency"), Str(TEXT("gold")) }, { TEXT("amount"), Num(25) }, { TEXT("ratio"), Num(0.75) },
 			{ TEXT("float"), Num(0.1) }, { TEXT("big"), Num(9000000000.0) }, { TEXT("price"), Num(4.99) }, { TEXT("boss"), Bool(false) },
 			{ TEXT("note"), MakeShared<FJsonValueNull>() }, { TEXT("text"), Str(TEXT("quote \" slash \\ line\nend")) } }));
+		Client->Traits(Object({ { TEXT("difficulty"), Str(TEXT("hard")) }, { TEXT("level"), Num(3) } }));
 		Client->Identify(TEXT("player_42"), Object({ { TEXT("plan"), Str(TEXT("supporter")) }, { TEXT("level"), Num(12) }, { TEXT("vip"), Bool(true) } }));
 		FManalensErrorOptions Options;
 		Options.Severity = EManalensSeverity::Critical;
@@ -380,9 +381,9 @@ bool FManalensPayloadTest::RunTest(const FString& Parameters)
 	}
 	const TArray<TSharedPtr<FJsonObject>> First = H.Requests[0].Events();
 	const TArray<TSharedPtr<FJsonObject>> Second = H.Requests[1].Events();
-	TestEqual(TEXT("first request"), FString::Join(Names(First), TEXT(",")), FString(TEXT("session_start,game_open,level_start,resource,identify,error,error")));
+	TestEqual(TEXT("first request"), FString::Join(Names(First), TEXT(",")), FString(TEXT("session_start,game_open,level_start,resource,traits,identify,error,error")));
 	TestEqual(TEXT("second request"), FString::Join(Names(Second), TEXT(",")), FString(TEXT("app_unclean_exit,session_end,session_start,game_open,level_complete,session_end")));
-	TestEqual(TEXT("the manual error has the same fingerprint as in the Godot and Unity SDKs"), First[5]->GetObjectField(TEXT("properties"))->GetStringField(TEXT("fingerprint")), FString(TEXT("38d0e3d0139dea87")));
+	TestEqual(TEXT("the manual error has the same fingerprint as in the Godot and Unity SDKs"), First[6]->GetObjectField(TEXT("properties"))->GetStringField(TEXT("fingerprint")), FString(TEXT("38d0e3d0139dea87")));
 	TestTrue(TEXT("integers have no fraction"), H.Requests[0].Body.Contains(TEXT("\"amount\":25,")) && H.Requests[0].Body.Contains(TEXT("\"big\":9000000000,")));
 	TestTrue(TEXT("short decimals"), H.Requests[0].Body.Contains(TEXT("\"float\":0.1,")) && H.Requests[0].Body.Contains(TEXT("\"price\":4.99,")));
 
@@ -1318,5 +1319,232 @@ bool FManalensConsoleValuesTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("each storefront is a platform-neutral lower-case value"), Value == Value.ToLower());
 	}
 	TestTrue(TEXT("the build platform is a known value"), FManalensClient::Platforms().Contains(FManalensClient::BuildPlatform()));
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	TArray<FRequest> LinkRequests(const FHarness& H)
+	{
+		TArray<FRequest> Out;
+		for (const FRequest& Request : H.Requests)
+		{
+			if (Request.Url.EndsWith(TEXT("/v0/link")))
+			{
+				Out.Add(Request);
+			}
+		}
+		return Out;
+	}
+
+	TArray<uint8> SteamTicket()
+	{
+		return { 20, 0, 0, 0, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25 };
+	}
+
+	const TCHAR* SteamTicketHex = TEXT("140000000a0b0c0d0e0f10111213141516171819");
+
+	/** A started client whose first batch (game_open, session_start) is sent, with the link answers recorded. */
+	TSharedRef<FManalensClient> StartLinker(FHarness& H, TArray<FString>& Answers, const FManalensConfig& Config)
+	{
+		TSharedRef<FManalensClient> Client = H.Start(Config);
+		Client->OnSteamLinked = [&Answers](bool bLinked, int32 Status, const FString& Code) { Answers.Add(FString::Printf(TEXT("%s %d %s"), bLinked ? TEXT("linked") : TEXT("failed"), Status, *Code).TrimEnd()); };
+		Client->Update();
+		return Client;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensTraitsTest, "Manalens.Traits.AnonymousUserAndConsent", Flags)
+bool FManalensTraitsTest::RunTest(const FString& Parameters)
+{
+	AddExpectedMessagePlain(TEXT("protected traits"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	AddExpectedMessagePlain(TEXT("needs at least one trait"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	{
+		FHarness H;
+		H.bHold = true;
+		TSharedRef<FManalensClient> Client = H.Start();
+		Client->Traits(Object({ { TEXT("level"), Num(3) }, { TEXT("difficulty"), Str(TEXT("hard")) }, { TEXT("note"), MakeShared<FJsonValueNull>() } }));
+		Client->Traits(Object({ { TEXT("email"), Str(TEXT("ana@example.com")) }, { TEXT("itch_user_id"), Str(TEXT("9")) }, { TEXT("plan"), Str(TEXT("pro")) } }));
+		Client->Traits(Object({ { TEXT("stripe_customer_id"), Str(TEXT("cus_1")) } }));
+		Client->Traits(Object({}));
+		Client->Identify(TEXT("player_7"));
+		Client->Traits(Object({ { TEXT("level"), Num(4) } }));
+		TArray<TSharedPtr<FJsonObject>> Traits;
+		for (const TSharedPtr<FJsonObject>& Event : Queued(*Client))
+		{
+			if (Event->GetStringField(TEXT("type")) == TEXT("traits"))
+			{
+				Traits.Add(Event);
+			}
+		}
+		if (!TestEqual(TEXT("three traits events"), Traits.Num(), 3))
+		{
+			return false;
+		}
+		TestFalse(TEXT("no event name"), Traits[0]->HasField(TEXT("event")));
+		TestFalse(TEXT("no user ID before identify"), Traits[0]->HasField(TEXT("user_id")));
+		TestEqual(TEXT("the anonymous ID"), Traits[0]->GetStringField(TEXT("anonymous_id")), Client->GetAnonymousId());
+		TestEqual(TEXT("traits"), Traits[0]->GetObjectField(TEXT("traits"))->GetStringField(TEXT("difficulty")), FString(TEXT("hard")));
+		TestTrue(TEXT("null kept"), Traits[0]->GetObjectField(TEXT("traits"))->HasTypedField<EJson::Null>(TEXT("note")));
+		TestEqual(TEXT("protected traits dropped"), Traits[1]->GetObjectField(TEXT("traits"))->Values.Num(), 1);
+		TestFalse(TEXT("no email in the queue"), FString::Join(Client->GetQueuedEvents(), TEXT("")).Contains(TEXT("ana@example.com")));
+		TestEqual(TEXT("user ID after identify"), Traits[2]->GetStringField(TEXT("user_id")), FString(TEXT("player_7")));
+	}
+	{
+		FHarness H;
+		H.bHold = true;
+		FManalensConfig Config = H.Config();
+		Config.bConsentRequired = true;
+		TSharedRef<FManalensClient> Client = H.Start(Config);
+		Client->Traits(Object({ { TEXT("level"), Num(1) }, { TEXT("mode"), Str(TEXT("easy")) } }));
+		Client->Traits(Object({ { TEXT("level"), Num(2) } }));
+		TestEqual(TEXT("nothing before consent"), Client->GetQueueSize(), 0);
+		Client->SetConsent(true);
+		int32 Count = 0;
+		for (const TSharedPtr<FJsonObject>& Event : Queued(*Client))
+		{
+			if (Event->GetStringField(TEXT("type")) == TEXT("traits"))
+			{
+				++Count;
+				TestEqual(TEXT("merged level"), Event->GetObjectField(TEXT("traits"))->GetNumberField(TEXT("level")), 2.0);
+				TestEqual(TEXT("merged mode"), Event->GetObjectField(TEXT("traits"))->GetStringField(TEXT("mode")), FString(TEXT("easy")));
+			}
+		}
+		TestEqual(TEXT("one traits event after consent"), Count, 1);
+		Client->SetConsent(false);
+		Client->Traits(Object({ { TEXT("level"), Num(3) } }));
+		Client->Reset();
+		Client->SetConsent(true);
+		TestFalse(TEXT("no traits from before Reset()"), FString::Join(Client->GetQueuedEvents(), TEXT("")).Contains(TEXT("\"traits\"")));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensLinkTest, "Manalens.Link.SteamTicket", Flags)
+bool FManalensLinkTest::RunTest(const FString& Parameters)
+{
+	AddExpectedMessagePlain(TEXT("LinkSteamTicket() failed"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
+	AddExpectedMessagePlain(TEXT("needs a ticket of 16 to 2048 bytes"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	AddExpectedMessagePlain(TEXT("needs 32 to 4096 hex characters"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	// Success: the hex ticket and the anonymous ID to the API host, from Update().
+	{
+		FHarness H;
+		TArray<FString> Answers;
+		FManalensConfig Config = H.Config();
+		Config.Endpoint = TEXT("https://events.manalens.dev/");
+		TSharedRef<FManalensClient> Client = StartLinker(H, Answers, Config);
+		TestEqual(TEXT("API URL"), Client->GetLinkUrl(), FString(TEXT("https://api.manalens.dev/v0/link")));
+		H.Status = 200;
+		Client->LinkSteamTicket(SteamTicket());
+		TestEqual(TEXT("sent from Update()"), LinkRequests(H).Num(), 0);
+		Client->Update();
+		const TArray<FRequest> Links = LinkRequests(H);
+		if (TestEqual(TEXT("one link request"), Links.Num(), 1))
+		{
+			TestEqual(TEXT("body"), Links[0].Body, FString::Printf(TEXT("{\"provider\":\"steam\",\"ticket\":\"%s\",\"anonymous_id\":\"%s\"}"), SteamTicketHex, *Client->GetAnonymousId()));
+			TestTrue(TEXT("publishable key header"), Links[0].Headers.Contains(TPair<FString, FString>(TEXT("x-publishable-key"), SyntheticKey())));
+		}
+		TestEqual(TEXT("answer"), FString::Join(Answers, TEXT("|")), FString(TEXT("linked 200")));
+		Client->Update();
+		TestEqual(TEXT("sent once"), LinkRequests(H).Num(), 1);
+		Client->LinkSteamTicket({ 1, 2, 3 });
+		Client->LinkSteamTicketHex(TEXT("abc"));
+		Client->LinkSteamTicketHex(SteamTicketHex);
+		Client->Update();
+		TestEqual(TEXT("the hex form, uppercase or lowercase"), LinkRequests(H).Num(), 2);
+	}
+	// ApiEndpoint wins; another host is used as it is.
+	{
+		FHarness H;
+		FManalensConfig Config = H.Config();
+		Config.ApiEndpoint = TEXT("https://example.com/mana/");
+		TestEqual(TEXT("ApiEndpoint"), H.Start(Config)->GetLinkUrl(), FString(TEXT("https://example.com/mana/v0/link")));
+		TestEqual(TEXT("other host"), H.Start()->GetLinkUrl(), FString(TEXT("https://collector.test/v0/link")));
+	}
+	// A refusal or a network error is not sent again.
+	const TPair<int32, const TCHAR*> Refusals[] = { { 400, TEXT("STEAM_TICKET_INVALID") }, { 401, TEXT("UNAUTHORIZED") }, { 403, TEXT("FORBIDDEN") }, { 409, TEXT("STEAM_NOT_CONNECTED") }, { 502, TEXT("STEAM_UNAVAILABLE") }, { 503, TEXT("NOT_CONFIGURED") }, { 0, TEXT("NETWORK_ERROR") } };
+	for (const TPair<int32, const TCHAR*>& Refusal : Refusals)
+	{
+		FHarness H;
+		TArray<FString> Answers;
+		TSharedRef<FManalensClient> Client = StartLinker(H, Answers, H.Config());
+		H.Status = Refusal.Key;
+		H.ResponseBody = FString::Printf(TEXT("{\"error\":{\"code\":\"%s\",\"message\":\"no\"}}"), Refusal.Value);
+		Client->LinkSteamTicket(SteamTicket());
+		for (int32 Tick = 0; Tick < 3; ++Tick)
+		{
+			H.Time += 120;
+			Client->Update();
+		}
+		TestEqual(FString::Printf(TEXT("HTTP %d: one request"), Refusal.Key), LinkRequests(H).Num(), 1);
+		TestEqual(FString::Printf(TEXT("HTTP %d: answer"), Refusal.Key), FString::Join(Answers, TEXT("|")), FString::Printf(TEXT("failed %d %s"), Refusal.Key, Refusal.Value));
+	}
+	// A 429 with Retry-After: one more try after the wait, then no loop. Over 60 s: no wait.
+	{
+		FHarness H;
+		TArray<FString> Answers;
+		TSharedRef<FManalensClient> Client = StartLinker(H, Answers, H.Config());
+		H.Status = 429;
+		H.RetryAfter = TEXT("2");
+		H.ResponseBody = TEXT("{\"error\":{\"code\":\"RATE_LIMITED\"}}");
+		Client->LinkSteamTicket(SteamTicket());
+		Client->Update();
+		H.Time += 1;
+		Client->Update();
+		TestEqual(TEXT("429: waits"), LinkRequests(H).Num(), 1);
+		H.Time += 1.5;
+		Client->Update();
+		TestEqual(TEXT("429: one more try"), LinkRequests(H).Num(), 2);
+		H.Time += 120;
+		Client->Update();
+		TestEqual(TEXT("429: no loop"), LinkRequests(H).Num(), 2);
+		TestEqual(TEXT("429: answer"), FString::Join(Answers, TEXT("|")), FString(TEXT("failed 429 RATE_LIMITED")));
+		Answers.Reset();
+		H.RetryAfter = TEXT("120");
+		Client->LinkSteamTicket(SteamTicket());
+		Client->Update();
+		H.Time += 200;
+		Client->Update();
+		TestEqual(TEXT("Retry-After over 60 s: no wait"), LinkRequests(H).Num(), 3);
+	}
+	// Consent withdrawn or Reset() during the wait: no second request.
+	for (int32 Change = 0; Change < 2; ++Change)
+	{
+		FHarness H;
+		TArray<FString> Answers;
+		TSharedRef<FManalensClient> Client = StartLinker(H, Answers, H.Config());
+		H.Status = 429;
+		H.RetryAfter = TEXT("2");
+		Client->LinkSteamTicket(SteamTicket());
+		Client->Update();
+		if (Change == 0)
+		{
+			Client->SetConsent(false);
+		}
+		else
+		{
+			Client->Reset();
+		}
+		H.Time += 3;
+		Client->Update();
+		TestEqual(Change == 0 ? TEXT("SetConsent(false): no second request") : TEXT("Reset(): no second request"), LinkRequests(H).Num(), 1);
+		TestEqual(TEXT("answer"), FString::Join(Answers, TEXT("|")), FString(Change == 0 ? TEXT("failed 0 CONSENT_REQUIRED") : TEXT("failed 0 IDENTITY_CHANGED")));
+	}
+	// Before consent: held until SetConsent(true).
+	{
+		FHarness H;
+		TArray<FString> Answers;
+		FManalensConfig Config = H.Config();
+		Config.bConsentRequired = true;
+		TSharedRef<FManalensClient> Client = StartLinker(H, Answers, Config);
+		Client->LinkSteamTicket(SteamTicket());
+		Client->Update();
+		TestEqual(TEXT("nothing before consent"), LinkRequests(H).Num(), 0);
+		Client->SetConsent(true);
+		Client->Update();
+		TestEqual(TEXT("sent after consent"), LinkRequests(H).Num(), 1);
+	}
 	return true;
 }

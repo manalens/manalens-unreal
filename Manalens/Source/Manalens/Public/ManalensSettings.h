@@ -27,6 +27,10 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Project")
 	FString Endpoint;
 
+	/** The API URL of Link Steam Ticket. Empty: the Endpoint with events. changed to api. */
+	UPROPERTY(config, EditAnywhere, Category = "Advanced")
+	FString ApiEndpoint;
+
 	/** false: the SDK sends nothing, writes no files, and keeps no ID. */
 	UPROPERTY(config, EditAnywhere, Category = "Project")
 	bool bEnabled = true;

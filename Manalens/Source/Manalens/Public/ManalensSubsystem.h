@@ -51,6 +51,26 @@ public:
 	void IdentifyJson(const FString& UserId, const TSharedPtr<FJsonObject>& Traits);
 
 	/** true starts tracking and sends game_open. false deletes the player ID, the session, and every unsent event. The choice is saved. */
+	/** Set traits on this player, with or without a player ID (P-2814). Waits for consent. Protected traits (email, itch_user_id, stripe_customer_id, paddle_customer_id) are not sent. */
+	UFUNCTION(BlueprintCallable, Category = "Manalens", meta = (AutoCreateRefTerm = "Strings,Numbers,Flags"))
+	void Traits(const TMap<FString, FString>& Strings, const TMap<FString, double>& Numbers, const TMap<FString, bool>& Flags);
+
+	/** Traits with a JSON object of scalar values (C++). */
+	void TraitsJson(const TSharedPtr<FJsonObject>& Traits);
+
+	/**
+	 * Verify the Steam account of this player (P-2815). Pass the bytes of a Steam Web API
+	 * ticket with the identity "manalens" (from the Steam Online Subsystem or the Steamworks
+	 * SDK: GetAuthTicketForWebApi("manalens") and its GetTicketForWebApiResponse_t). Sent
+	 * after consent; the answer comes in On Steam Linked.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Manalens")
+	void LinkSteamTicket(const TArray<uint8>& Ticket);
+
+	/** Link Steam Ticket with the ticket as a hex string. */
+	UFUNCTION(BlueprintCallable, Category = "Manalens")
+	void LinkSteamTicketHex(const FString& TicketHex);
+
 	UFUNCTION(BlueprintCallable, Category = "Manalens")
 	void SetConsent(bool bGranted);
 
@@ -93,6 +113,10 @@ public:
 	/** After each send. bOk is false for a network error or a 5xx, 408, or 429 response; those events stay queued. */
 	UPROPERTY(BlueprintAssignable, Category = "Manalens")
 	FManalensFlushed OnFlushed;
+
+	/** The answer to Link Steam Ticket: bLinked, the HTTP status (0: no request or a network error), and the error code (for example STEAM_TICKET_INVALID, NETWORK_ERROR, CONSENT_REQUIRED, or IDENTITY_CHANGED). */
+	UPROPERTY(BlueprintAssignable, Category = "Manalens")
+	FManalensSteamLinked OnSteamLinked;
 
 	/** The client, for tests and advanced C++ use. Null when the SDK is off. */
 	TSharedPtr<FManalensClient> GetClient() const { return Client; }
