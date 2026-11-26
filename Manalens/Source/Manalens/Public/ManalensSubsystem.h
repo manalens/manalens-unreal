@@ -65,7 +65,7 @@ public:
 	/** Record an error with more scalar properties (C++). */
 	void TrackErrorJson(const FString& Message, const FManalensErrorOptions& Options, const TSharedPtr<FJsonObject>& Properties);
 
-	/** A function that gets the properties of each error event before it is queued. Return nullptr to drop the error (C++). */
+	/** A function that gets a copy of each event before it is queued (track, error, automatic events, identify). Return it (changed or not), or nullptr to drop it (C++). See FManalensClient::BeforeSend. */
 	void SetBeforeSend(TFunction<TSharedPtr<FJsonObject>(TSharedPtr<FJsonObject>)> Callback);
 
 	/** Forget the player on sign-out: a new anonymous ID and a new session. */

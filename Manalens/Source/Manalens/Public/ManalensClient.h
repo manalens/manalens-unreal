@@ -106,7 +106,16 @@ public:
 	TFunction<void(int32 /*Status*/, int32 /*Dropped*/)> OnSendFailed;
 	/** After each response. bOk is false for a network error or a retried status. */
 	TFunction<void(int32 /*Sent*/, bool /*bOk*/)> OnFlushed;
-	/** Gets the properties of each error event before it is queued. Return nullptr to drop the error. */
+	/**
+	 * Gets a copy of each event before it is queued: track events (also error and the
+	 * automatic events such as session_start), and identify. Fields: type, event,
+	 * properties, traits, user_id, message_id, anonymous_id, session_id, context, ...
+	 * Return the event to send (changed or not), or nullptr to drop it. The SDK takes
+	 * event, properties, traits, and user_id from the result and keeps the other fields.
+	 * When the result changes or removes type, message_id, anonymous_id, session_id, or
+	 * context.app, the original event is sent. Errors pass the error limits first.
+	 * Events recorded inside the callback are dropped.
+	 */
 	TFunction<TSharedPtr<FJsonObject>(TSharedPtr<FJsonObject>)> BeforeSend;
 
 	/** Checks the options and starts. Returns false and logs why when an option is wrong. */
@@ -209,7 +218,10 @@ private:
 	void StartSession(double At);
 	void EndSession(double At);
 	void Touch();
-	void Enqueue(const FString& Type, const FString& Event, const TSharedPtr<FJsonObject>& Properties, double At = -1.0, const TSharedPtr<FJsonObject>& Traits = nullptr);
+	/** Returns false when BeforeSend dropped the event. */
+	bool Enqueue(const FString& Type, const FString& Event, const TSharedPtr<FJsonObject>& Properties, double At = -1.0, const TSharedPtr<FJsonObject>& Traits = nullptr);
+	/** Runs BeforeSend on a copy of the envelope. nullptr: drop the event. */
+	TSharedPtr<FJsonObject> ApplyBeforeSend(const TSharedRef<FJsonObject>& Envelope);
 	void Prune();
 	void TrySend();
 	void OnResponse(const FManalensHttpResult& Result, const TSet<FString>& Ids);
@@ -255,6 +267,7 @@ private:
 	int32 Failures = 0;
 	TOptional<TPair<FString, TSharedPtr<FJsonObject>>> DeferredIdentify;
 	TArray<FString> RecentEvents;
+	bool bInBeforeSend = false;
 	TMap<FString, double> ErrorSeen;
 	TArray<double> ErrorTimes;
 	int32 AutoErrors = 0;

@@ -517,25 +517,67 @@ namespace ManalensClean
 		}
 	}
 
-	/** The value after key=, token=, secret=, password=, authorization:, or bearer. */
+	/**
+	 * The value after key, token, secret, password, or authorization with = or :
+	 * (also the JSON form "token": "...") and after bearer. A quoted value is
+	 * redacted up to its closing quote.
+	 */
 	void MaskKeyValues(FString& Text)
 	{
-		const TCHAR* Markers[] = { TEXT("key="), TEXT("token="), TEXT("secret="), TEXT("password="), TEXT("authorization:"), TEXT("bearer ") };
+		// bearer first, so "token: Bearer abc" loses both words.
+		const TCHAR* Names[] = { TEXT("bearer"), TEXT("authorization"), TEXT("key"), TEXT("token"), TEXT("secret"), TEXT("password") };
 		const FString Redacted = TEXT("[redacted]");
-		for (const TCHAR* Marker : Markers)
+		for (const TCHAR* Name : Names)
 		{
-			const bool bToLineEnd = FCString::Strcmp(Marker, TEXT("authorization:")) == 0;
+			const bool bBearer = FCString::Strcmp(Name, TEXT("bearer")) == 0;
+			const bool bAuthorization = FCString::Strcmp(Name, TEXT("authorization")) == 0;
 			int32 From = 0;
 			int32 At = INDEX_NONE;
-			while ((At = Text.Find(Marker, ESearchCase::IgnoreCase, ESearchDir::FromStart, From)) != INDEX_NONE)
+			while ((At = Text.Find(Name, ESearchCase::IgnoreCase, ESearchDir::FromStart, From)) != INDEX_NONE)
 			{
-				int32 Start = At + FCString::Strlen(Marker);
+				int32 Start = At + FCString::Strlen(Name);
+				if (bBearer)
+				{
+					if (Start >= Text.Len() || Text[Start] != TEXT(' '))
+					{
+						From = At + 1;
+						continue;
+					}
+				}
+				else
+				{
+					if (Start < Text.Len() && (Text[Start] == TEXT('"') || Text[Start] == TEXT('\'')))
+					{
+						++Start; // The closing quote of a JSON key.
+					}
+					while (Start < Text.Len() && Text[Start] == TEXT(' '))
+					{
+						++Start;
+					}
+					if (Start >= Text.Len() || (Text[Start] != TEXT(':') && Text[Start] != TEXT('=')))
+					{
+						From = At + 1;
+						continue;
+					}
+					++Start;
+				}
 				while (Start < Text.Len() && Text[Start] == TEXT(' '))
 				{
 					++Start;
 				}
 				int32 End = Start;
-				if (bToLineEnd)
+				if (Start < Text.Len() && (Text[Start] == TEXT('"') || Text[Start] == TEXT('\'')))
+				{
+					// A quoted value: up to the closing quote (or the end of the text).
+					const TCHAR Quote = Text[Start];
+					++Start;
+					End = Start;
+					while (End < Text.Len() && Text[End] != Quote)
+					{
+						++End;
+					}
+				}
+				else if (bAuthorization)
 				{
 					// Authorization: <scheme> <credentials>, to the end of the line.
 					while (End < Text.Len() && Text[End] != TEXT('\n') && Text[End] != TEXT('\r') && Text[End] != TEXT('"') && Text[End] != TEXT('\''))
@@ -545,7 +587,7 @@ namespace ManalensClean
 				}
 				else
 				{
-					while (End < Text.Len() && !IsEnd(Text[End]) && Text[End] != TEXT('&') && Text[End] != TEXT(',') && Text[End] != TEXT(';'))
+					while (End < Text.Len() && !IsEnd(Text[End]) && Text[End] != TEXT('&') && Text[End] != TEXT(',') && Text[End] != TEXT(';') && Text[End] != TEXT(']') && Text[End] != TEXT('}'))
 					{
 						++End;
 					}
@@ -560,7 +602,13 @@ namespace ManalensClean
 		}
 	}
 
-	/** Runs of 24 or more characters from A-Z, a-z, 0-9, _, and - (keys, tokens, and IDs). */
+	bool IsBase64Char(TCHAR C) { return IsTokenChar(C) || C == TEXT('+') || C == TEXT('/') || C == TEXT('='); }
+
+	/**
+	 * Keys, tokens, and IDs: a JWT (eyJ... with two dots), a base64 run of 24 or
+	 * more characters with + or a trailing =, and runs of 24 or more characters
+	 * from A-Z, a-z, 0-9, _, and -. File paths (with / but no + or =) stay.
+	 */
 	void MaskLongTokens(FString& Text)
 	{
 		FString Out;
@@ -573,10 +621,48 @@ namespace ManalensClean
 			{
 				++End;
 			}
-			if (End - Index >= 24)
+			int32 RedactTo = INDEX_NONE;
+			if (Index + 2 < Text.Len() && Text[Index] == TEXT('e') && Text[Index + 1] == TEXT('y') && Text[Index + 2] == TEXT('J'))
+			{
+				int32 JwtEnd = Index;
+				int32 Dots = 0;
+				while (JwtEnd < Text.Len() && (IsTokenChar(Text[JwtEnd]) || Text[JwtEnd] == TEXT('.')))
+				{
+					Dots += Text[JwtEnd] == TEXT('.') ? 1 : 0;
+					++JwtEnd;
+				}
+				while (JwtEnd > Index && Text[JwtEnd - 1] == TEXT('.'))
+				{
+					--JwtEnd; // A full stop after the token.
+					--Dots;
+				}
+				if (Dots >= 2)
+				{
+					RedactTo = JwtEnd;
+				}
+			}
+			if (RedactTo == INDEX_NONE)
+			{
+				int32 B64End = Index;
+				bool bPlus = false;
+				while (B64End < Text.Len() && IsBase64Char(Text[B64End]))
+				{
+					bPlus |= Text[B64End] == TEXT('+');
+					++B64End;
+				}
+				if (B64End - Index >= 24 && (bPlus || Text[B64End - 1] == TEXT('=')))
+				{
+					RedactTo = B64End;
+				}
+			}
+			if (RedactTo == INDEX_NONE && End - Index >= 24)
+			{
+				RedactTo = End;
+			}
+			if (RedactTo != INDEX_NONE)
 			{
 				Out += TEXT("[redacted]");
-				Index = End;
+				Index = RedactTo;
 			}
 			else if (End > Index)
 			{
@@ -1010,8 +1096,9 @@ TSharedRef<FJsonObject> FManalensClient::BuildContext() const
 	return Context;
 }
 
-void FManalensClient::Enqueue(const FString& Type, const FString& Event, const TSharedPtr<FJsonObject>& Properties, double At, const TSharedPtr<FJsonObject>& Traits)
+bool FManalensClient::Enqueue(const FString& Type, const FString& InEvent, const TSharedPtr<FJsonObject>& Properties, double At, const TSharedPtr<FJsonObject>& Traits)
 {
+	FString Event = InEvent;
 	const double When = At < 0.0 ? Now() : At;
 	TSharedRef<FJsonObject> Envelope = MakeShared<FJsonObject>();
 	const FString MessageId = NewId();
@@ -1038,6 +1125,20 @@ void FManalensClient::Enqueue(const FString& Type, const FString& Event, const T
 	if (Traits.IsValid())
 	{
 		Envelope->SetObjectField(TEXT("traits"), Traits);
+	}
+	if (BeforeSend)
+	{
+		const TSharedPtr<FJsonObject> Final = ApplyBeforeSend(Envelope);
+		if (!Final.IsValid())
+		{
+			if (Config.bDebug)
+			{
+				UE_LOG(LogManalens, Log, TEXT("Manalens: BeforeSend dropped %s %s"), *Type, *Event);
+			}
+			return false;
+		}
+		Envelope = Final.ToSharedRef();
+		Envelope->TryGetStringField(TEXT("event"), Event);
 	}
 	if (Type == TEXT("track") && Event != TEXT("error"))
 	{
@@ -1067,6 +1168,116 @@ void FManalensClient::Enqueue(const FString& Type, const FString& Event, const T
 		SaveQueue();
 		bFlushRequested = true;
 	}
+	return true;
+}
+
+TSharedPtr<FJsonObject> FManalensClient::ApplyBeforeSend(const TSharedRef<FJsonObject>& Envelope)
+{
+	if (bInBeforeSend)
+	{
+		UE_LOG(LogManalens, Warning, TEXT("Manalens: an event recorded inside BeforeSend is dropped"));
+		return nullptr;
+	}
+	bInBeforeSend = true;
+	const TSharedPtr<FJsonObject> Changed = BeforeSend(FromJson(ToJson(Envelope)));
+	bInBeforeSend = false;
+	if (!Changed.IsValid())
+	{
+		return nullptr;
+	}
+	auto Field = [](const TSharedPtr<FJsonObject>& Object, const TCHAR* Name) -> TSharedPtr<FJsonValue>
+	{
+		const TSharedPtr<FJsonValue>* Value = Object->Values.Find(Name);
+		return Value && Value->IsValid() && (*Value)->Type != EJson::Null ? *Value : TSharedPtr<FJsonValue>();
+	};
+	bool bOk = true;
+	for (const TCHAR* Key : { TEXT("type"), TEXT("message_id"), TEXT("anonymous_id"), TEXT("session_id") })
+	{
+		FString Original;
+		const bool bHas = Envelope->TryGetStringField(Key, Original);
+		const TSharedPtr<FJsonValue> Value = Field(Changed, Key);
+		if (bHas != Value.IsValid() || (bHas && (Value->Type != EJson::String || Value->AsString() != Original)))
+		{
+			bOk = false;
+		}
+	}
+	const TSharedPtr<FJsonObject> OriginalApp = Envelope->GetObjectField(TEXT("context"))->GetObjectField(TEXT("app"));
+	const TSharedPtr<FJsonValue> Context = Field(Changed, TEXT("context"));
+	const TSharedPtr<FJsonValue> App = Context.IsValid() && Context->Type == EJson::Object ? Field(Context->AsObject(), TEXT("app")) : TSharedPtr<FJsonValue>();
+	if (!App.IsValid() || App->Type != EJson::Object || App->AsObject()->Values.Num() != OriginalApp->Values.Num())
+	{
+		bOk = false;
+	}
+	else
+	{
+		for (const auto& Pair : OriginalApp->Values)
+		{
+			FString Value;
+			if (!App->AsObject()->TryGetStringField(FString(*Pair.Key), Value) || Value != Pair.Value->AsString())
+			{
+				bOk = false;
+			}
+		}
+	}
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	Out->Values = Envelope->Values;
+	if (Envelope->HasField(TEXT("event")))
+	{
+		const TSharedPtr<FJsonValue> Name = Field(Changed, TEXT("event"));
+		if (Name.IsValid() && Name->Type == EJson::String && Name->AsString().Len() >= 1 && Name->AsString().Len() <= 128)
+		{
+			Out->SetStringField(TEXT("event"), Name->AsString());
+		}
+		else
+		{
+			bOk = false;
+		}
+	}
+	for (const TCHAR* Key : { TEXT("properties"), TEXT("traits") })
+	{
+		if (!Envelope->HasField(Key))
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonValue> Value = Field(Changed, Key);
+		if (!Value.IsValid())
+		{
+			Out->SetObjectField(Key, MakeShared<FJsonObject>());
+		}
+		else if (Value->Type == EJson::Object)
+		{
+			Out->SetObjectField(Key, Fit(Scalars(Value->AsObject()), Key));
+		}
+		else
+		{
+			bOk = false;
+		}
+	}
+	const TSharedPtr<FJsonValue> User = Field(Changed, TEXT("user_id"));
+	if (!User.IsValid() || (User->Type == EJson::String && User->AsString().IsEmpty()))
+	{
+		Out->RemoveField(TEXT("user_id"));
+	}
+	else if (User->Type == EJson::String && User->AsString().Len() <= 255)
+	{
+		Out->SetStringField(TEXT("user_id"), User->AsString());
+	}
+	else
+	{
+		bOk = false;
+	}
+	FString Type;
+	Envelope->TryGetStringField(TEXT("type"), Type);
+	if (Type == TEXT("identify") && !Out->HasField(TEXT("user_id")))
+	{
+		bOk = false;
+	}
+	if (!bOk)
+	{
+		UE_LOG(LogManalens, Warning, TEXT("Manalens: BeforeSend changed or removed type, message_id, anonymous_id, session_id, context.app, or gave a wrong event, properties, traits, or user_id; the original event is sent"));
+		return Envelope;
+	}
+	return Out;
 }
 
 void FManalensClient::Prune()
@@ -1379,21 +1590,16 @@ void FManalensClient::RecordError(const FString& Message, const FManalensErrorOp
 		++ErrorsDropped;
 		return;
 	}
-	if (BeforeSend)
+	Touch();
+	// BeforeSend runs in Enqueue, after the fingerprint and the limits.
+	if (!Enqueue(TEXT("track"), TEXT("error"), Props))
 	{
-		const TSharedPtr<FJsonObject> Changed = BeforeSend(Props);
-		if (!Changed.IsValid())
-		{
-			return;
-		}
-		Props = Scalars(Changed);
+		return;
 	}
 	if (!bManual)
 	{
 		++AutoErrors;
 	}
-	Touch();
-	Enqueue(TEXT("track"), TEXT("error"), Props);
 	// Keep the error on disk now: a crash can follow it.
 	SaveQueue();
 }

@@ -37,7 +37,28 @@ namespace ManalensDocSnippets
 		Options.Severity = EManalensSeverity::Critical;
 		Options.bHandled = false;
 		Manalens->TrackError(TEXT("Save failed"), Options);
-		Manalens->SetBeforeSend([](TSharedPtr<FJsonObject> Props) { return Props; });
+
+		// Before send: sampling
+		Manalens->SetBeforeSend([](TSharedPtr<FJsonObject> Event) -> TSharedPtr<FJsonObject>
+		{
+			FString Name;
+			if (Event->TryGetStringField(TEXT("event"), Name) && Name == TEXT("player_jump") && FMath::FRand() >= 0.1f)
+			{
+				return nullptr; // drop
+			}
+			return Event;
+		});
+		// Before send: PII scrub
+		Manalens->SetBeforeSend([](TSharedPtr<FJsonObject> Event) -> TSharedPtr<FJsonObject>
+		{
+			Event->GetObjectField(TEXT("properties"))->RemoveField(TEXT("email"));
+			const TSharedPtr<FJsonObject>* Traits = nullptr;
+			if (Event->TryGetObjectField(TEXT("traits"), Traits))
+			{
+				(*Traits)->RemoveField(TEXT("email"));
+			}
+			return Event;
+		});
 
 		// Consent
 		Manalens->SetConsent(true);

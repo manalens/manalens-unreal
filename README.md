@@ -29,6 +29,35 @@ Add `"Manalens"` to the dependencies in the `Build.cs` file of your game module.
 
 The other nodes are Identify, Set Consent, Flush, Track Error, Reset, and Link URL. The full guide, with every setting, is in the [Unreal SDK docs](https://docs.manalens.dev/sdks/unreal).
 
+## BeforeSend
+
+`SetBeforeSend()` (C++) gets a copy of each event (track, identify, error, automatic events) before it is queued. Return it (changed or not), or `nullptr` to drop it. The SDK takes `event`, `properties`, `traits`, and `user_id` from the result. If the result changes or removes `type`, `message_id`, `anonymous_id`, `session_id`, or `context.app`, the SDK sends the original event.
+
+```cpp
+// Keep 10% of player_jump events (sampling).
+Manalens->SetBeforeSend([](TSharedPtr<FJsonObject> Event) -> TSharedPtr<FJsonObject>
+{
+    FString Name;
+    if (Event->TryGetStringField(TEXT("event"), Name) && Name == TEXT("player_jump") && FMath::FRand() >= 0.1f)
+    {
+        return nullptr; // drop
+    }
+    return Event;
+});
+
+// Remove personal data from every event (PII scrub).
+Manalens->SetBeforeSend([](TSharedPtr<FJsonObject> Event) -> TSharedPtr<FJsonObject>
+{
+    Event->GetObjectField(TEXT("properties"))->RemoveField(TEXT("email"));
+    const TSharedPtr<FJsonObject>* Traits = nullptr;
+    if (Event->TryGetObjectField(TEXT("traits"), Traits))
+    {
+        (*Traits)->RemoveField(TEXT("email"));
+    }
+    return Event;
+});
+```
+
 ## Repository layout
 
 | Path | What it is |

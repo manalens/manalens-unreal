@@ -853,15 +853,16 @@ bool FManalensErrorTest::RunTest(const FString& Parameters)
 	Client->TrackError(TEXT("manual after the cap"));
 	TestEqual(TEXT("manual errors skip the session cap"), CountErrors(), 26);
 
-	Client->BeforeSend = [](TSharedPtr<FJsonObject> Props) -> TSharedPtr<FJsonObject>
+	Client->BeforeSend = [](TSharedPtr<FJsonObject> Event) -> TSharedPtr<FJsonObject>
 	{
+		const TSharedPtr<FJsonObject> Props = Event->GetObjectField(TEXT("properties"));
 		FString Message;
 		if (Props->TryGetStringField(TEXT("message"), Message) && Message.Contains(TEXT("secret")))
 		{
 			return nullptr;
 		}
 		Props->SetStringField(TEXT("checked"), TEXT("yes"));
-		return Props;
+		return Event;
 	};
 	H.Time += 1.5;
 	Client->TrackError(TEXT("a secret value"));
@@ -873,6 +874,98 @@ bool FManalensErrorTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensBeforeSendTest, "Manalens.Errors.BeforeSendOnEveryEvent", Flags)
+bool FManalensBeforeSendTest::RunTest(const FString& Parameters)
+{
+	// G-2527: BeforeSend gets every event, can sample and scrub, and cannot break the envelope.
+	FHarness H;
+	H.bHold = true;
+	TSharedRef<FManalensClient> Client = H.Make();
+	TArray<FString> Seen;
+	int32 Jumps = 0;
+	FString Mode;
+	FManalensClient* Raw = &Client.Get();
+	Client->BeforeSend = [&Seen, &Jumps, &Mode, Raw](TSharedPtr<FJsonObject> Event) -> TSharedPtr<FJsonObject>
+	{
+		FString Type;
+		FString Name;
+		Event->TryGetStringField(TEXT("type"), Type);
+		Event->TryGetStringField(TEXT("event"), Name);
+		Seen.Add(Type + TEXT(":") + Name);
+		if (Mode == TEXT("break_id"))
+		{
+			Event->SetStringField(TEXT("message_id"), TEXT("changed"));
+			Event->GetObjectField(TEXT("properties"))->SetNumberField(TEXT("level"), 99);
+			return Event;
+		}
+		if (Mode == TEXT("no_anonymous_id"))
+		{
+			Event->RemoveField(TEXT("anonymous_id"));
+			return Event;
+		}
+		if (Mode == TEXT("break_app"))
+		{
+			Event->GetObjectField(TEXT("context"))->GetObjectField(TEXT("app"))->RemoveField(TEXT("platform"));
+			return Event;
+		}
+		if (Mode == TEXT("nested"))
+		{
+			Raw->Track(TEXT("from_the_hook"));
+			return Event;
+		}
+		if (Name == TEXT("player_jump") && Jumps++ % 10 != 0)
+		{
+			return nullptr; // keep 1 in 10
+		}
+		Event->GetObjectField(TEXT("properties"))->RemoveField(TEXT("email"));
+		const TSharedPtr<FJsonObject>* Traits = nullptr;
+		if (Event->TryGetObjectField(TEXT("traits"), Traits))
+		{
+			(*Traits)->RemoveField(TEXT("email"));
+		}
+		return Event;
+	};
+	Client->Init(H.Config());
+	TestTrue(TEXT("session_start goes through the hook"), Seen.Contains(TEXT("track:session_start")));
+	TestTrue(TEXT("game_open goes through the hook"), Seen.Contains(TEXT("track:game_open")));
+	for (int32 Index = 0; Index < 20; ++Index)
+	{
+		Client->Track(TEXT("player_jump"));
+	}
+	TestEqual(TEXT("sampling keeps 2 of 20"), Names(Queued(*Client)).FilterByPredicate([](const FString& Name) { return Name == TEXT("player_jump"); }).Num(), 2);
+	TSharedPtr<FJsonObject> Signup = MakeShared<FJsonObject>();
+	Signup->SetStringField(TEXT("email"), TEXT("ana@example.com"));
+	Signup->SetNumberField(TEXT("level"), 1);
+	Client->Track(TEXT("signup"), Signup);
+	TSharedPtr<FJsonObject> Last = Queued(*Client).Last();
+	TestFalse(TEXT("the email is scrubbed"), Last->GetObjectField(TEXT("properties"))->HasField(TEXT("email")));
+	TestTrue(TEXT("other properties stay"), Last->GetObjectField(TEXT("properties"))->HasField(TEXT("level")));
+	TSharedPtr<FJsonObject> Traits = MakeShared<FJsonObject>();
+	Traits->SetStringField(TEXT("email"), TEXT("ana@example.com"));
+	Traits->SetStringField(TEXT("plan"), TEXT("supporter"));
+	Client->Identify(TEXT("player_42"), Traits);
+	Last = Queued(*Client).Last();
+	TestEqual(TEXT("identify goes through the hook"), NameOf(Last), FString(TEXT("identify")));
+	TestFalse(TEXT("the trait email is scrubbed"), Last->GetObjectField(TEXT("traits"))->HasField(TEXT("email")));
+	for (const TCHAR* Broken : { TEXT("break_id"), TEXT("no_anonymous_id"), TEXT("break_app") })
+	{
+		Mode = Broken;
+		H.Time += 2;
+		TSharedPtr<FJsonObject> Level = MakeShared<FJsonObject>();
+		Level->SetNumberField(TEXT("level"), 3);
+		Client->Track(TEXT("level_start"), Level);
+		Last = Queued(*Client).Last();
+		TestEqual(FString(Broken) + TEXT(": the original event is sent"), Last->GetObjectField(TEXT("properties"))->GetNumberField(TEXT("level")), 3.0);
+		TestNotEqual(FString(Broken) + TEXT(": the message ID is kept"), Last->GetStringField(TEXT("message_id")), FString(TEXT("changed")));
+		TestTrue(FString(Broken) + TEXT(": the anonymous ID is kept"), Last->HasField(TEXT("anonymous_id")));
+		TestTrue(FString(Broken) + TEXT(": context.app is kept"), Last->GetObjectField(TEXT("context"))->GetObjectField(TEXT("app"))->HasField(TEXT("platform")));
+	}
+	Mode = TEXT("nested");
+	Client->Track(TEXT("level_start"));
+	TestFalse(TEXT("an event recorded inside the hook is dropped"), Names(Queued(*Client)).Contains(TEXT("from_the_hook")));
+	return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensIdentityTest, "Manalens.Identity.LinkUrlAndReset", Flags)
 bool FManalensIdentityTest::RunTest(const FString& Parameters)
@@ -1054,6 +1147,16 @@ bool FManalensLogCleaningTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("key=, token=, secret=, password="), Clean(TEXT("api_key=abc123 token=xyz&secret=s3 PASSWORD=hunter2")), FString(TEXT("api_key=[redacted] token=[redacted]&secret=[redacted] PASSWORD=[redacted]")));
 	TestEqual(TEXT("authorization:"), Clean(TEXT("Authorization: Bearer abc.def")), FString(TEXT("Authorization: [redacted]")));
 	TestEqual(TEXT("bearer"), Clean(TEXT("sent bearer xyz.123 to the server")), FString(TEXT("sent bearer [redacted] to the server")));
+	TestEqual(TEXT("quoted values"), Clean(TEXT("password=\"hunter2 two\" and key='a b'")), FString(TEXT("password=\"[redacted]\" and key='[redacted]'")));
+	TestEqual(TEXT("JSON token and api_key"), Clean(TEXT("{\"token\": \"abc def\", \"api_key\":\"k1\", \"user\": 3}")), FString(TEXT("{\"token\": \"[redacted]\", \"api_key\":\"[redacted]\", \"user\": 3}")));
+	TestEqual(TEXT("JSON password and secret"), Clean(TEXT("{\"password\": \"p w\", \"secret\": 42}")), FString(TEXT("{\"password\": \"[redacted]\", \"secret\": [redacted]}")));
+	TestEqual(TEXT("header forms"), Clean(TEXT("token: abc123 password : hunter2")), FString(TEXT("token: [redacted] password : [redacted]")));
+	TestEqual(TEXT("JSON Authorization"), Clean(TEXT("\"Authorization\": \"Bearer abc\"")), FString(TEXT("\"Authorization\": \"[redacted]\"")));
+	TestEqual(TEXT("token: Bearer"), Clean(TEXT("header token: Bearer abc")), FString(TEXT("header token: [redacted] [redacted]")));
+	TestEqual(TEXT("JWT"), Clean(TEXT("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln. failed")), FString(TEXT("jwt [redacted]. failed")));
+	TestEqual(TEXT("base64 with +"), Clean(TEXT("blob aGVsbG8gd29ybGQgaGVsbG8+d29ybGQ end")), FString(TEXT("blob [redacted] end")));
+	TestEqual(TEXT("base64 with ="), Clean(TEXT("blob aGVsbG8gd29ybGQgaGVsbG8vd29ybGQ= end")), FString(TEXT("blob [redacted] end")));
+	TestEqual(TEXT("a path stays"), Clean(TEXT("load /Game/Maps/boss_room_final/arena.umap failed")), FString(TEXT("load /Game/Maps/boss_room_final/arena.umap failed")));
 
 	// Long tokens
 	TestEqual(TEXT("24 characters"), Clean(TEXT("session ABCDEFGHIJKLMNOPQRSTUV_- expired")), FString(TEXT("session [redacted] expired")));
