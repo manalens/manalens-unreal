@@ -1,12 +1,12 @@
-# Release on a pushed tag vX.Y.Z (scripts/publish-sdk.sh in the Manalens
-# monorepo pushes main and the tag; this workflow makes the release).
+# Release on a pushed tag vX.Y.Z (CONTRIBUTING.md: bump the version and the
+# CHANGELOG on main, then push the tag; this workflow makes the release).
 #
 # 1. verify: the tag is strict semver, its commit is on main, and the version
 #    equals VersionName in Manalens/Manalens.uplugin and the top CHANGELOG.md
 #    heading.
 # 2. test: the same checks as CI (ci.yml). Hosted runners have no Unreal
-#    Engine: the plugin build and its tests run in the Manalens monorepo
-#    (sdks/unreal/Tests/run-tests.sh) before publish-sdk.sh.
+#    Engine: run the plugin build and its tests (Tests/run-tests.sh) on
+#    the release commit before you push the tag.
 # 3. build: the source plugin folder as a zip (Manalens/...), to unzip into a
 #    project's Plugins folder. Also SHA256SUMS and a build provenance
 #    attestation.

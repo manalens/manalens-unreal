@@ -88,6 +88,8 @@ UE_ROOT="/Users/Shared/Epic Games/UE_5.8" Tests/run-tests.sh
 
 The script builds the plugin, copies it into `HostProject/Plugins`, and runs `Automation RunTests Manalens` with `UnrealEditor-Cmd`. Set `UPDATE_FIXTURES=1` to write the request bodies to `Tests/fixtures`.
 
+To change the SDK, see [CONTRIBUTING.md](CONTRIBUTING.md): the test setup, how to release, and the commit rules.
+
 ## Links
 
 - Docs: [docs.manalens.dev/sdks/unreal](https://docs.manalens.dev/sdks/unreal)

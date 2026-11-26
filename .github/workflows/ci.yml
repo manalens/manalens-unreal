@@ -4,8 +4,8 @@
 # GitHub-hosted runners have no Unreal Engine, so this runs only cheap checks:
 # Manalens.uplugin is valid JSON, VersionName equals the top CHANGELOG heading,
 # and no build output or binary file is committed. The full tests (the plugin
-# build, the automation tests, and the request fixtures) run in the Manalens
-# monorepo, where this SDK is developed: sdks/unreal/Tests/run-tests.sh.
+# build, the automation tests, and the request fixtures) run with
+# Tests/run-tests.sh on a machine with Unreal Engine (CONTRIBUTING.md).
 name: CI
 
 on:
