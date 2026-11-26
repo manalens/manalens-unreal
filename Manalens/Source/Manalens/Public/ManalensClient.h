@@ -80,7 +80,7 @@ class MANALENS_API FManalensClient
 {
 public:
 	static constexpr const TCHAR* LibraryName = TEXT("Manalens Unreal SDK");
-	static constexpr const TCHAR* LibraryVersion = TEXT("0.1.4");
+	static constexpr const TCHAR* LibraryVersion = TEXT("0.1.5");
 	static constexpr double SessionTimeoutSeconds = 30.0 * 60.0;
 	static constexpr double SessionMaxAgeSeconds = 24.0 * 60.0 * 60.0;
 	/** The collector accepts app events up to 7 days old. Keep 1 hour of margin for clock skew. */
