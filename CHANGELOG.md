@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.6 (2026-11-26)
 
 - Console values (P-2776). `context.app.platform` is now `ps5`, `xbox_series`, `xbox_one`, `switch`, or `switch2` in a console build (from `PLATFORM_PS5`, `PLATFORM_XSX`, `PLATFORM_XB1`, `PLATFORM_SWITCH`, and `PLATFORM_SWITCH2`), instead of `other`. New **Platform** setting (and `FManalensConfig::Platform` is now checked): empty detects the platform; set it when the plugin cannot name the console, in that platform's own `Game.ini`. A wrong value logs a warning and the build platform is used. The **Storefront** setting has PlayStation Store (`psn`), Microsoft Store on Xbox (`xbox`), and Nintendo eShop (`nintendo`).
 
