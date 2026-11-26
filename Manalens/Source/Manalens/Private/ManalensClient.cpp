@@ -1112,7 +1112,8 @@ void FManalensClient::TrySend()
 		Body += Queue[Index].Json;
 		Ids.Add(Queue[Index].MessageId);
 	}
-	Body += TEXT("]}");
+	// sent_at: the device clock now. The collector corrects the event times with it, so a wrong clock gives right times (P-2799).
+	Body += FString::Printf(TEXT("],\"sent_at\":\"%s\"}"), *FormatTimestamp(Now()));
 	TArray<TPair<FString, FString>> Headers;
 	Headers.Emplace(TEXT("Content-Type"), TEXT("application/json"));
 	Headers.Emplace(TEXT("x-publishable-key"), Config.PublishableKey);

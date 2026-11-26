@@ -733,6 +733,9 @@ bool FManalensRetryTest::RunTest(const FString& Parameters)
 	Client->Flush();
 	TestEqual(TEXT("429: sent again"), H.Requests.Num(), 2);
 	TestTrue(TEXT("429: same message IDs"), H.Requests[1].MessageIds() == FirstIds);
+	// P-2799: each send carries the device clock of that send, so the collector can correct the event times.
+	TestEqual(TEXT("sent_at of the first send"), ParseObject(H.Requests[0].Body)->GetStringField(TEXT("sent_at")), FManalensClient::FormatTimestamp(H.Time - 3));
+	TestEqual(TEXT("sent_at of the retry"), ParseObject(H.Requests[1].Body)->GetStringField(TEXT("sent_at")), FManalensClient::FormatTimestamp(H.Time));
 	TestTrue(TEXT("429: Retry-After is honoured"), Client->GetBackoffUntil() >= H.Time + 600.0);
 
 	H.Time += 601;
