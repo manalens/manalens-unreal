@@ -422,6 +422,9 @@ bool FManalensPayloadTest::RunTest(const FString& Parameters)
 			TSharedPtr<FJsonObject> O = OurEvents[E]->AsObject();
 			U->GetObjectField(TEXT("context"))->GetObjectField(TEXT("app"))->SetStringField(TEXT("engine"), TEXT("unreal"));
 			U->GetObjectField(TEXT("context"))->SetStringField(TEXT("library_name"), FManalensClient::LibraryName);
+			// Each SDK has its own version.
+			U->GetObjectField(TEXT("context"))->SetStringField(TEXT("library_version"), FManalensClient::LibraryVersion);
+			U->SetStringField(TEXT("version"), FManalensClient::LibraryVersion);
 			FString Source;
 			if (U->GetObjectField(TEXT("properties"))->TryGetStringField(TEXT("source"), Source) && Source == TEXT("unity_log"))
 			{
