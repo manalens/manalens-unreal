@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-27)
 
 - New **Traits** (`Traits()`, `TraitsJson()`, and `FManalensClient::Traits()`) (P-2814): set traits on this player, with or without a player ID. Before **Identify** the traits belong to the anonymous ID of this install. The protected traits `email`, `itch_user_id`, `stripe_customer_id`, and `paddle_customer_id` are not sent (one warning). Calls before consent are merged and sent after consent.
 - New **Link Steam Ticket** (`LinkSteamTicket(TArray<uint8>)`, `LinkSteamTicketHex(FString)`) and the **On Steam Linked** event (P-2815). The game passes a Steam Web API ticket with the identity `manalens` (from the Steamworks SDK or the Steam Online Subsystem); the plugin posts it to `/v0/link` on the API host (new **Api Endpoint** setting; default: the Endpoint with `events.` changed to `api.`) after consent, from the tick. No Steam module dependency. A refusal is not sent again; a `429` with `Retry-After` of 60 s or less is tried once more, but not after Set Consent (false) or Reset during the wait.
