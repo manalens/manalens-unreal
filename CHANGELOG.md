@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 (2026-11-26)
 
 - Each request sends `sent_at`, the device clock at the time of the send. The collector uses it to correct the event times, so a device clock that is fast or slow no longer gives wrong times or refused events (P-2799).
 - Changed: `SetBeforeSend()` (and `FManalensClient::BeforeSend`) now runs on every event (track, identify, error, and the automatic events), not only on errors. The callback gets a copy of the whole event (`type`, `event`, `properties`, `traits`, `user_id`, ...) instead of the error properties; return it (changed or not), or `nullptr` to drop it. The SDK takes `event`, `properties`, `traits`, and `user_id` from the result. If the result changes or removes `type`, `message_id`, `anonymous_id`, `session_id`, or `context.app`, the original event is sent. Errors pass the error limits first. Same behavior as the Godot and Unity SDKs (G-2527).
