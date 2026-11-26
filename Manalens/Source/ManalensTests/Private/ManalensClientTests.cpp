@@ -10,6 +10,7 @@
 #include "HAL/PlatformProcess.h"
 #include "Interfaces/IPluginManager.h"
 #include "ManalensClient.h"
+#include "ManalensSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
@@ -1274,3 +1275,48 @@ bool FManalensEditorCategoriesTest::RunTest(const FString& Parameters)
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS
+
+// ---------------------------------------------------------------------------
+// Console values (P-2776): the Platform setting names a console build, a wrong
+// value falls back to the build platform, and console storefronts are sent.
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensConsoleValuesTest, "Manalens.Context.ConsoleValues", Flags)
+bool FManalensConsoleValuesTest::RunTest(const FString& Parameters)
+{
+	auto AppOf = [](const TSharedPtr<FJsonObject>& Event) { return Event->GetObjectField(TEXT("context"))->GetObjectField(TEXT("app")); };
+	for (const TCHAR* Platform : { TEXT("ps5"), TEXT("xbox_series"), TEXT("xbox_one"), TEXT("switch"), TEXT("switch2") })
+	{
+		FHarness H;
+		H.bHold = true;
+		FManalensConfig Config = H.Config();
+		Config.Platform = Platform;
+		TSharedRef<FManalensClient> Client = H.Start(Config);
+		const TArray<TSharedPtr<FJsonObject>> Events = Queued(*Client);
+		TestTrue(TEXT("events are queued"), Events.Num() > 0);
+		for (const TSharedPtr<FJsonObject>& Event : Events)
+		{
+			TestEqual(TEXT("platform"), AppOf(Event)->GetStringField(TEXT("platform")), FString(Platform));
+		}
+	}
+	for (const TCHAR* Storefront : { TEXT("psn"), TEXT("xbox"), TEXT("nintendo") })
+	{
+		FHarness H;
+		H.bHold = true;
+		FManalensConfig Config = H.Config();
+		Config.Storefront = Storefront;
+		Config.Platform = TEXT("ps4");
+		TSharedRef<FManalensClient> Client = H.Start(Config);
+		const TSharedPtr<FJsonObject> App = AppOf(Queued(*Client)[0]);
+		TestEqual(TEXT("console storefront"), App->GetStringField(TEXT("storefront")), FString(Storefront));
+		TestEqual(TEXT("a wrong platform falls back to the build platform"), App->GetStringField(TEXT("platform")), FManalensClient::BuildPlatform());
+	}
+	TestEqual(TEXT("Psn"), UManalensSettings::StorefrontValue(EManalensStorefront::Psn), FString(TEXT("psn")));
+	TestEqual(TEXT("Xbox"), UManalensSettings::StorefrontValue(EManalensStorefront::Xbox), FString(TEXT("xbox")));
+	TestEqual(TEXT("Nintendo"), UManalensSettings::StorefrontValue(EManalensStorefront::Nintendo), FString(TEXT("nintendo")));
+	for (const FString& Value : FManalensClient::Storefronts())
+	{
+		TestTrue(TEXT("each storefront is a platform-neutral lower-case value"), Value == Value.ToLower());
+	}
+	TestTrue(TEXT("the build platform is a known value"), FManalensClient::Platforms().Contains(FManalensClient::BuildPlatform()));
+	return true;
+}

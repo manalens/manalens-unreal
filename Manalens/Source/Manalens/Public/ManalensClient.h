@@ -19,7 +19,7 @@ struct MANALENS_API FManalensConfig
 	FString Endpoint;
 	FString AppVersion;
 	FString Build;
-	/** steam, itch, epic, gog, app_store, play, other, or empty. */
+	/** steam, itch, epic, gog, app_store, play, psn, xbox, nintendo, other, or empty. */
 	FString Storefront;
 	/** true: no events and no stored ID until SetConsent(true). */
 	bool bConsentRequired = false;
@@ -31,7 +31,7 @@ struct MANALENS_API FManalensConfig
 	int32 MaxAutoErrorsPerSession = 50;
 	/** Folder for the state, the queue, and the opt-out marker. Empty: Saved/Manalens. */
 	FString StorageDir;
-	/** Empty: the platform of this build (PLATFORM_* macros). */
+	/** Empty: the platform of this build (PLATFORM_* macros). Else one of Platforms(). */
 	FString Platform;
 	/** Empty: the current culture, for example en-US. */
 	FString Locale;
@@ -193,8 +193,10 @@ public:
 	static FString FormatTimestamp(double Unix);
 	/** A JSON number: integers without a fraction, other values with the shortest exact form. */
 	static FString FormatNumber(double Value);
-	/** The platform of this build: windows, macos, linux, android, ios, or other. */
+	/** The platform of this build: windows, macos, linux, android, ios, ps5, xbox_series, xbox_one, switch, switch2, or other. */
 	static FString BuildPlatform();
+	/** The platform values that the collector accepts. */
+	static const TArray<FString>& Platforms();
 	static const TArray<FString>& Storefronts();
 	static const TCHAR* SeverityName(EManalensSeverity Severity);
 	/**

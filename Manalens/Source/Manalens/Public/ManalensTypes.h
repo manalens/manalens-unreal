@@ -16,6 +16,9 @@ enum class EManalensStorefront : uint8
 	Gog UMETA(DisplayName = "GOG"),
 	AppStore UMETA(DisplayName = "App Store"),
 	Play UMETA(DisplayName = "Google Play"),
+	Psn UMETA(DisplayName = "PlayStation Store"),
+	Xbox UMETA(DisplayName = "Microsoft Store on Xbox"),
+	Nintendo UMETA(DisplayName = "Nintendo eShop"),
 	Other UMETA(DisplayName = "Other"),
 };
 

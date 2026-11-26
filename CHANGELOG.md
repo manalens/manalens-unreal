@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Console values (P-2776). `context.app.platform` is now `ps5`, `xbox_series`, `xbox_one`, `switch`, or `switch2` in a console build (from `PLATFORM_PS5`, `PLATFORM_XSX`, `PLATFORM_XB1`, `PLATFORM_SWITCH`, and `PLATFORM_SWITCH2`), instead of `other`. New **Platform** setting (and `FManalensConfig::Platform` is now checked): empty detects the platform; set it when the plugin cannot name the console, in that platform's own `Game.ini`. A wrong value logs a warning and the build platform is used. The **Storefront** setting has PlayStation Store (`psn`), Microsoft Store on Xbox (`xbox`), and Nintendo eShop (`nintendo`).
+
 ## 0.1.5 (2026-11-26)
 
 - Dedicated servers (G-2533): the SDK now starts on a dedicated server (`IsRunningDedicatedServer()`), but sends no `game_open`, `session_start`, `session_end`, or `app_unclean_exit`, and does not count as an install. Before, it stayed off there. It logs one line that says why. **Track** and **Identify** still work. The new setting **Track Server Builds** (default off, under Advanced) sends the automatic events from a dedicated server. New `FManalensConfig::bServerBuild` and `bTrackServerBuilds`. Commandlets still do not start the SDK. See the new docs page "Multiplayer and dedicated servers".

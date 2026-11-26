@@ -225,6 +225,11 @@ bool FManalensClient::Init(const FManalensConfig& InConfig)
 		UE_LOG(LogManalens, Warning, TEXT("Manalens: the storefront must be one of %s; ignored"), *FString::Join(Storefronts(), TEXT(", ")));
 		Config.Storefront.Reset();
 	}
+	if (!Config.Platform.IsEmpty() && !Platforms().Contains(Config.Platform))
+	{
+		UE_LOG(LogManalens, Warning, TEXT("Manalens: the platform must be one of %s; the platform of this build is used"), *FString::Join(Platforms(), TEXT(", ")));
+		Config.Platform.Reset();
+	}
 	if (Config.Platform.IsEmpty())
 	{
 		Config.Platform = BuildPlatform();
@@ -2015,15 +2020,35 @@ FString FManalensClient::BuildPlatform()
 	return TEXT("android");
 #elif PLATFORM_IOS && !PLATFORM_TVOS && !PLATFORM_VISIONOS
 	return TEXT("ios");
+// Consoles (P-2776). The console platform extensions define these macros; a
+// desktop engine does not, so each check tests defined() first. Switch 2 comes
+// before Switch in case a Switch 2 build also defines PLATFORM_SWITCH. If a
+// console build still reports other, set the Platform setting.
+#elif defined(PLATFORM_PS5) && PLATFORM_PS5
+	return TEXT("ps5");
+#elif defined(PLATFORM_XSX) && PLATFORM_XSX
+	return TEXT("xbox_series");
+#elif defined(PLATFORM_XB1) && PLATFORM_XB1
+	return TEXT("xbox_one");
+#elif defined(PLATFORM_SWITCH2) && PLATFORM_SWITCH2
+	return TEXT("switch2");
+#elif defined(PLATFORM_SWITCH) && PLATFORM_SWITCH
+	return TEXT("switch");
 #else
-	// tvOS, visionOS, consoles, and other targets.
+	// tvOS, visionOS, PS4, and other targets.
 	return TEXT("other");
 #endif
 }
 
+const TArray<FString>& FManalensClient::Platforms()
+{
+	static const TArray<FString> Values = { TEXT("windows"), TEXT("macos"), TEXT("linux"), TEXT("web"), TEXT("android"), TEXT("ios"), TEXT("ps5"), TEXT("xbox_series"), TEXT("xbox_one"), TEXT("switch"), TEXT("switch2"), TEXT("other") };
+	return Values;
+}
+
 const TArray<FString>& FManalensClient::Storefronts()
 {
-	static const TArray<FString> Values = { TEXT("steam"), TEXT("itch"), TEXT("epic"), TEXT("gog"), TEXT("app_store"), TEXT("play"), TEXT("other") };
+	static const TArray<FString> Values = { TEXT("steam"), TEXT("itch"), TEXT("epic"), TEXT("gog"), TEXT("app_store"), TEXT("play"), TEXT("psn"), TEXT("xbox"), TEXT("nintendo"), TEXT("other") };
 	return Values;
 }
 

@@ -113,6 +113,7 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	Config.Build = GIsEditor && !Settings->EditorBuild.IsEmpty() ? Settings->EditorBuild : Settings->Build;
 	Config.Storefront = UManalensSettings::StorefrontValue(Settings->Storefront);
+	Config.Platform = Settings->Platform.TrimStartAndEnd();
 	Config.bConsentRequired = Settings->bConsentRequired;
 	Config.bDebug = Settings->bDebug;
 	// A dedicated server keeps Track() and Identify(), without the client events.

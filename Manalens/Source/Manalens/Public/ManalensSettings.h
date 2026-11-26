@@ -51,6 +51,15 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Build")
 	EManalensStorefront Storefront = EManalensStorefront::None;
 
+	/**
+	 * Empty: the platform of this build (windows, macos, linux, android, ios,
+	 * ps5, xbox_series, xbox_one, switch, switch2, or other). Set it when the
+	 * plugin cannot name the console, for example switch2, in the platform's
+	 * own Game.ini so that it applies to that platform only.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Build")
+	FString Platform;
+
 	/** No events and no stored ID until Set Consent (true). */
 	UPROPERTY(config, EditAnywhere, Category = "Privacy")
 	bool bConsentRequired = false;
@@ -95,6 +104,6 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Advanced")
 	bool bDebug = false;
 
-	/** The storefront as the collector value: steam, itch, epic, gog, app_store, play, other, or empty. */
+	/** The storefront as the collector value: steam, itch, epic, gog, app_store, play, psn, xbox, nintendo, other, or empty. */
 	static FString StorefrontValue(EManalensStorefront Value);
 };

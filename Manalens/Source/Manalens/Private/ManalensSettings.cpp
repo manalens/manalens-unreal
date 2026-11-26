@@ -18,6 +18,9 @@ FString UManalensSettings::StorefrontValue(EManalensStorefront Value)
 	case EManalensStorefront::Gog: return TEXT("gog");
 	case EManalensStorefront::AppStore: return TEXT("app_store");
 	case EManalensStorefront::Play: return TEXT("play");
+	case EManalensStorefront::Psn: return TEXT("psn");
+	case EManalensStorefront::Xbox: return TEXT("xbox");
+	case EManalensStorefront::Nintendo: return TEXT("nintendo");
 	case EManalensStorefront::Other: return TEXT("other");
 	default: return FString();
 	}
