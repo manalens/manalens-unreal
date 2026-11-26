@@ -759,7 +759,11 @@ void FManalensClient::SetFocused(bool bInFocused)
 	else
 	{
 		bFocused = true;
-		Touch();
+		// Only an open session: after BeginShutdown() the next event starts a new one.
+		if (!SessionId.IsEmpty())
+		{
+			Touch();
+		}
 	}
 }
 

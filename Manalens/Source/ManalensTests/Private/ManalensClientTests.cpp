@@ -615,6 +615,7 @@ bool FManalensShutdownTickTest::RunTest(const FString& Parameters)
 	H.bHold = true; // The shutdown send never completes, so the game keeps calling Update().
 	TSharedRef<FManalensClient> Client = H.Start();
 	Client->BeginShutdown();
+	Client->SetFocused(true);
 	H.Time += H.Config().FlushIntervalSeconds + 1;
 	Client->Update();
 	Client->Update();
