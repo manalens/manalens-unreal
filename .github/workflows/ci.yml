@@ -60,7 +60,9 @@ jobs:
       - name: VersionName equals the top CHANGELOG heading
         run: |
           VERSION=$(node -p "JSON.parse(require('fs').readFileSync('Manalens/Manalens.uplugin', 'utf8')).VersionName")
-          TOP=$(sed -n 's/^## \([^ ]*\).*/\1/p' CHANGELOG.md | head -n 1)
+          # An "## Unreleased" section may sit above the newest version between releases.
+          # release.yml requires the version heading at the top.
+          TOP=$(sed -n 's/^## \([^ ]*\).*/\1/p' CHANGELOG.md | grep -vx Unreleased | head -n 1)
           echo "Manalens.uplugin: $VERSION, CHANGELOG top heading: $TOP"
           test "$VERSION" = "$TOP" || { echo "::error::VersionName ($VERSION) and the top CHANGELOG heading ($TOP) differ"; exit 1; }
 

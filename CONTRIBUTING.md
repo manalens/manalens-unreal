@@ -16,7 +16,7 @@ GitHub-hosted runners have no Unreal Engine. CI (`.github/workflows/ci.yml`) onl
 
 ## Release
 
-1. In a pull request, set `VersionName` (and raise `Version` by 1) in `Manalens/Manalens.uplugin`, and add a `## X.Y.Z` section at the top of `CHANGELOG.md`. CI checks that `VersionName` and the heading are the same.
+1. In a pull request, set `VersionName` (and raise `Version` by 1) in `Manalens/Manalens.uplugin`, and put a `## X.Y.Z (YYYY-MM-DD)` section at the top of `CHANGELOG.md` (rename `## Unreleased` if it is there). CI checks that `VersionName` and the heading are the same. Between releases, CI allows a `## Unreleased` section above the newest version; the release workflow does not.
 2. Run `Tests/run-tests.sh` on that commit. Merge it to `main`.
 3. Tag that commit and push the tag:
 
