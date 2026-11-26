@@ -1,0 +1,80 @@
+# Unreal plugin checks on every push to main and every pull request.
+# The release workflow (release.yml) calls this workflow too.
+#
+# GitHub-hosted runners have no Unreal Engine, so this runs only cheap checks:
+# Manalens.uplugin is valid JSON, VersionName equals the top CHANGELOG heading,
+# and no build output or binary file is committed. The full tests (the plugin
+# build, the automation tests, and the request fixtures) run in the Manalens
+# monorepo, where this SDK is developed: sdks/unreal/Tests/run-tests.sh.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Plugin descriptor, version, and no binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.20.0'
+          package-manager-cache: false
+
+      - name: Manalens.uplugin is valid
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const plugin = JSON.parse(fs.readFileSync('Manalens/Manalens.uplugin', 'utf8'))
+          const problems = []
+          if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(plugin.VersionName ?? '')) problems.push(`VersionName "${plugin.VersionName}" is not X.Y.Z`)
+          if (!Number.isInteger(plugin.Version) || plugin.Version < 1) problems.push(`Version ${plugin.Version} is not a positive integer`)
+          if (!Array.isArray(plugin.Modules) || !plugin.Modules.some(m => m.Name === 'Manalens')) problems.push('no Manalens module')
+          for (const m of plugin.Modules ?? []) {
+            if (!fs.existsSync(`Manalens/Source/${m.Name}/${m.Name}.Build.cs`)) problems.push(`module ${m.Name} has no Source/${m.Name}/${m.Name}.Build.cs`)
+          }
+          JSON.parse(fs.readFileSync('HostProject/HostProject.uproject', 'utf8'))
+          if (problems.length) { for (const p of problems) console.log(`::error::${p}`); process.exit(1) }
+          console.log(`Manalens.uplugin ok: VersionName ${plugin.VersionName}, Version ${plugin.Version}`)
+          NODE
+
+      - name: VersionName equals the top CHANGELOG heading
+        run: |
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('Manalens/Manalens.uplugin', 'utf8')).VersionName")
+          TOP=$(sed -n 's/^## \([^ ]*\).*/\1/p' CHANGELOG.md | head -n 1)
+          echo "Manalens.uplugin: $VERSION, CHANGELOG top heading: $TOP"
+          test "$VERSION" = "$TOP" || { echo "::error::VersionName ($VERSION) and the top CHANGELOG heading ($TOP) differ"; exit 1; }
+
+      - name: No build output or binaries committed
+        run: |
+          if git ls-files | grep -iE '(^|/)(Binaries|Intermediate|Saved|DerivedDataCache)/|\.(dll|so|dylib|pdb|lib|a|exe|o|obj|ipa|apk|uasset|umap|zip)$'; then
+            echo "::error::build output or binary files are committed (listed above)"
+            exit 1
+          fi
+          # Any other file that git sees as binary (no text in the index).
+          BINARY=$(git ls-files --eol | awk '$1 == "i/-text" { sub(/^[^\t]*\t/, ""); print }')
+          if [ -n "$BINARY" ]; then
+            echo "$BINARY"
+            echo "::error::binary files are committed (listed above)"
+            exit 1
+          fi
+          echo "No binaries."

@@ -69,6 +69,16 @@ Manalens->SetBeforeSend([](TSharedPtr<FJsonObject> Event) -> TSharedPtr<FJsonObj
 | `Tests/run-tests.sh` | Builds the plugin with `RunUAT BuildPlugin` and runs the tests headless. |
 | `Tests/fixtures/` | The request bodies of the test scenario. They match the Unity SDK fixtures. |
 | `Tests/E2E/` | A small game module for the end-to-end test against a real collector. |
+| `.github/workflows/` | CI (`ci.yml`) checks `Manalens.uplugin`, the version, and that no binaries are committed. GitHub-hosted runners have no Unreal Engine, so the build and the tests run with `Tests/run-tests.sh` before each release. `release.yml` makes a release from a `v*` tag. |
+
+## Releases
+
+Each [release](https://github.com/manalens/manalens-unreal/releases) has `manalens-unreal-<version>.zip` (the `Manalens` plugin folder, source only), `SHA256SUMS`, and the changes from `CHANGELOG.md`. GitHub Actions builds the zip from the tagged commit and attests its build provenance. To check a download:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify manalens-unreal-<version>.zip --repo manalens/manalens-unreal
+```
 
 ## Test
 
