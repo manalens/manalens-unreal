@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: a quit added an empty session. While `Shutdown()` waited for the last send, the flush timer could fire and start a new session after `session_end`. So each quit counted one extra session with no events. Found in the `with-unity` example run (P-2676).
+- Fixed: an install could be lost. `game_open` (with `is_first_open`) and `app_unclean_exit` stayed only in memory until the next save of the queue (a full batch, the flush timer, focus loss, or quit). A first launch with no network that was killed before then lost the install, and the next launch sent `is_first_open` false. Now the queue is written to disk as soon as these events are queued, before any send (P-2773).
 - Play In Editor: errors of the editor itself are no longer sent as game errors. The editor logs in the same process as the game, so a real Play In Editor session sent `error` events for `LogBlueprint`, `LogEditor`, `LogShaderCompilers`, `LogDerivedDataCache`, `LogSourceControl` and other editor categories. In the editor, the log capture now skips the categories of editor modules (`FManalensClient::IsEditorLogCategory`). A packaged game is not changed (P-2792).
 
 ## 0.1.0 (unreleased)

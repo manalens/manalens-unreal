@@ -725,7 +725,8 @@ void FManalensClient::Update()
 		if (bIdentityActive)
 		{
 			// While the game has focus the player is active: keep the session alive.
-			if (bFocused)
+			// Only an open one: after BeginShutdown() a tick must not start a new session.
+			if (bFocused && !SessionId.IsEmpty())
 			{
 				Touch();
 			}
@@ -903,6 +904,9 @@ void FManalensClient::StartIdentity()
 	Open->SetStringField(TEXT("first_open_at"), FirstOpenAt);
 	Enqueue(TEXT("track"), TEXT("game_open"), Open);
 	SaveState();
+	// Write game_open (the install signal) and app_unclean_exit to disk before
+	// any send: a process killed before the next save would lose them.
+	SaveQueue();
 	if (DeferredIdentify.IsSet())
 	{
 		const TPair<FString, TSharedPtr<FJsonObject>> Pending = DeferredIdentify.GetValue();

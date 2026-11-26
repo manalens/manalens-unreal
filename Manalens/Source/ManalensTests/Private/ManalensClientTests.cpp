@@ -573,6 +573,59 @@ bool FManalensQueueTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensInstallKillTest, "Manalens.Queue.InstallSavedBeforeAnySend", Flags)
+bool FManalensInstallKillTest::RunTest(const FString& Parameters)
+{
+	FHarness H;
+	H.bHold = true; // No send completes.
+	const double T0 = H.Time;
+	FString OnDisk;
+	{
+		// First launch, offline, killed before any send, tick, focus loss or quit.
+		TSharedRef<FManalensClient> Client = H.Start();
+		FFileHelper::LoadFileToString(OnDisk, *FPaths::Combine(H.Dir, FManalensClient::QueueFileName));
+	}
+	TestTrue(TEXT("game_open is on disk before any send"), OnDisk.Contains(TEXT("\"game_open\"")) && OnDisk.Contains(TEXT("\"is_first_open\":true")));
+	H.Time = T0 + 3 * 24 * 3600;
+	TSharedRef<FManalensClient> Client = H.Start();
+	TArray<TSharedPtr<FJsonObject>> Opens;
+	for (const TSharedPtr<FJsonObject>& Event : Queued(*Client))
+	{
+		if (NameOf(Event) == TEXT("game_open"))
+		{
+			Opens.Add(Event);
+		}
+	}
+	if (TestEqual(TEXT("two game_open events after the relaunch"), Opens.Num(), 2))
+	{
+		TestTrue(TEXT("the first is the install"), Opens[0]->GetObjectField(TEXT("properties"))->GetBoolField(TEXT("is_first_open")));
+		TestEqual(TEXT("the install keeps the time it happened"), Opens[0]->GetStringField(TEXT("original_timestamp")), FString(TEXT("2027-01-15T08:00:00.000Z")));
+		TestFalse(TEXT("the second is not"), Opens[1]->GetObjectField(TEXT("properties"))->GetBoolField(TEXT("is_first_open")));
+		TestEqual(TEXT("same anonymous ID"), Opens[0]->GetStringField(TEXT("anonymous_id")), Opens[1]->GetStringField(TEXT("anonymous_id")));
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensShutdownTickTest, "Manalens.Session.NoNewSessionWhileShuttingDown", Flags)
+bool FManalensShutdownTickTest::RunTest(const FString& Parameters)
+{
+	FHarness H;
+	H.bHold = true; // The shutdown send never completes, so the game keeps calling Update().
+	TSharedRef<FManalensClient> Client = H.Start();
+	Client->BeginShutdown();
+	H.Time += H.Config().FlushIntervalSeconds + 1;
+	Client->Update();
+	Client->Update();
+	const TArray<FString> Q = Names(Queued(*Client));
+	TestEqual(TEXT("the queue ends with session_end"), Q.Num() > 0 ? Q.Last() : FString(), FString(TEXT("session_end")));
+	TestEqual(TEXT("one session_start"), Q.FilterByPredicate([](const FString& N) { return N == TEXT("session_start"); }).Num(), 1);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensConsentTest, "Manalens.Consent.WithdrawWipesState", Flags)
 bool FManalensConsentTest::RunTest(const FString& Parameters)
 {
