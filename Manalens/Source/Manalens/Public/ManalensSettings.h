@@ -100,6 +100,18 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Errors")
 	bool bCaptureCrashStacks = true;
 
+	/**
+	 * Hang detection: send an error with error_type app_hang when one frame takes
+	 * longer than this many seconds (the game thread is stuck), with the game
+	 * thread stack. A watchdog thread writes it to disk while the game is stuck,
+	 * so a game that the player kills keeps it, and app_crash links to it. 0 turns
+	 * it off; other values are clamped to 1 to 60. Not counted while the game is in
+	 * the background, during a map load,
+	 * at a debugger or Blueprint breakpoint, or in the first frames.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Errors", meta = (ClampMin = "0", ClampMax = "60"))
+	float HangThresholdSeconds = 5.0f;
+
 	/** Seconds between sends. */
 	UPROPERTY(config, EditAnywhere, Category = "Advanced", meta = (ClampMin = "1"))
 	float FlushIntervalSeconds = 10.0f;

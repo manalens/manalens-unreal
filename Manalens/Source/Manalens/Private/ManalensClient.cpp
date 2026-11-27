@@ -2,9 +2,13 @@
 
 #include "ManalensClient.h"
 
+#include "CoreGlobals.h"
+
 #include "HAL/FileManager.h"
 #include "HAL/PlatformMisc.h"
 #include "HAL/PlatformProcess.h"
+#include "HAL/PlatformStackWalk.h"
+#include "HAL/PlatformTime.h"
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
@@ -171,6 +175,7 @@ FManalensClient::FManalensClient()
 	Now = []() { return static_cast<double>((FDateTime::UtcNow() - FDateTime(1970, 1, 1)).GetTicks()) / ETimespan::TicksPerSecond; };
 	NewId = []() { return FManalensClient::NewUuidV4(); };
 	Random = []() { return FMath::FRand() * 0.999999; };
+	MonotonicNow = []() { return FPlatformTime::Seconds(); };
 	Transport = [this](const FString& InUrl, const TArray<TPair<FString, FString>>& Headers, const FString& Body, FManalensSendDone Done)
 	{
 		DefaultTransport(InUrl, Headers, Body, MoveTemp(Done));
@@ -180,6 +185,7 @@ FManalensClient::FManalensClient()
 FManalensClient::~FManalensClient()
 {
 	*Alive = false;
+	Hang.Reset(); // Stops the watchdog thread: it writes to this client's folder.
 }
 
 // Setup ------------------------------------------------------------------------
@@ -267,6 +273,7 @@ bool FManalensClient::Init(const FManalensConfig& InConfig)
 	{
 		UE_LOG(LogManalens, Log, TEXT("Manalens: waiting for consent; no events and no ID"));
 	}
+	StartHangWatchdog();
 	return true;
 }
 
@@ -994,6 +1001,11 @@ void FManalensClient::SetConsent(bool bGranted)
 	bQueueDirty = false;
 	bFlushRequested = false;
 	IFileManager::Get().Delete(*PathOf(QueueFileName), false, true, true);
+	if (Hang)
+	{
+		Hang->ClearSaved([this]() { IFileManager::Get().Delete(*PathOf(HangFileName), false, true, true); }, true);
+	}
+	SessionHangId.Reset();
 	ClearErrorHistory();
 }
 
@@ -1020,6 +1032,11 @@ void FManalensClient::Reset()
 	const double At = Now();
 	EndSession(At); // Sends errors_dropped of the old session.
 	ClearErrorHistory();
+	if (Hang)
+	{
+		// No hang of the new player with the old session or breadcrumbs.
+		Hang->ClearSaved([this]() { IFileManager::Get().Delete(*PathOf(HangFileName), false, true, true); }, true);
+	}
 	UserId.Reset();
 	AnonymousId = NewId();
 	State->SetStringField(TEXT("user_id"), FString());
@@ -1047,6 +1064,14 @@ void FManalensClient::Update()
 	if (bOptOutPending)
 	{
 		WriteOptOut();
+	}
+	if (Hang)
+	{
+		FManalensHangWatchdog::FHang Ended;
+		if (Hang->Beat(bIdentityActive && bFocused, SessionId, Ended))
+		{
+			RecordRecoveredHang(Ended);
+		}
 	}
 	const double At = Now();
 	if (At >= NextTickAt)
@@ -1118,6 +1143,11 @@ void FManalensClient::UpdateSteamLink()
 
 void FManalensClient::SetFocused(bool bInFocused)
 {
+	// No hang while the game is in the background: the OS may stop its frames.
+	if (Hang)
+	{
+		Hang->SetPaused(FManalensHangWatchdog::EPauseCause::Focus, !bInFocused);
+	}
 	if (!bIdentityActive)
 	{
 		return;
@@ -1144,6 +1174,7 @@ void FManalensClient::SetFocused(bool bInFocused)
 
 void FManalensClient::BeginShutdown()
 {
+	StopHangWatchdog(); // The game quits: a slow quit is not a hang.
 	if (!bIdentityActive)
 	{
 		return;
@@ -1257,12 +1288,23 @@ void FManalensClient::StartIdentity()
 		bool bWasFocused = true;
 		Session->TryGetBoolField(TEXT("exited"), bExited);
 		Session->TryGetBoolField(TEXT("focused"), bWasFocused);
+		// A hang that the game never recovered from (it was killed while stuck),
+		// else the last hang of the session that ended: app_crash links to it.
+		FString HangId = SendSavedHang();
+		if (HangId.IsEmpty())
+		{
+			Session->TryGetStringField(TEXT("hang_message_id"), HangId);
+		}
 		// No normal exit and the game had focus: count it as a crash. A game the
 		// OS closed in the background is not a crash.
 		if (!bServerQuiet && !bExited && bWasFocused)
 		{
 			TSharedPtr<FJsonObject> Crash = MakeShared<FJsonObject>();
 			Crash->SetStringField(TEXT("previous_session_id"), PreviousId);
+			if (!HangId.IsEmpty())
+			{
+				Crash->SetStringField(TEXT("hang_message_id"), HangId);
+			}
 			for (const TCHAR* Key : { TEXT("build"), TEXT("app_version") })
 			{
 				FString Value;
@@ -1281,6 +1323,10 @@ void FManalensClient::StartIdentity()
 			Enqueue(TEXT("track"), TEXT("app_crash"), Crash, LastActivityAt);
 		}
 		EndSession(LastActivityAt);
+	}
+	else
+	{
+		IFileManager::Get().Delete(*PathOf(HangFileName), false, true, true); // The hang of a session that is gone.
 	}
 	StartSession(At);
 	TSharedPtr<FJsonObject> Open = MakeShared<FJsonObject>();
@@ -1314,6 +1360,7 @@ void FManalensClient::StartIdentity()
 
 void FManalensClient::StartSession(double At)
 {
+	SessionHangId.Reset();
 	SessionId = NewId();
 	SessionStartedAt = At;
 	LastActivityAt = At;
@@ -1407,12 +1454,12 @@ TSharedRef<FJsonObject> FManalensClient::BuildContext() const
 	return Context;
 }
 
-bool FManalensClient::Enqueue(const FString& Type, const FString& InEvent, const TSharedPtr<FJsonObject>& Properties, double At, const TSharedPtr<FJsonObject>& Traits)
+bool FManalensClient::Enqueue(const FString& Type, const FString& InEvent, const TSharedPtr<FJsonObject>& Properties, double At, const TSharedPtr<FJsonObject>& Traits, const FString& InMessageId)
 {
 	FString Event = InEvent;
 	const double When = At < 0.0 ? Now() : At;
 	TSharedRef<FJsonObject> Envelope = MakeShared<FJsonObject>();
-	const FString MessageId = NewId();
+	const FString MessageId = InMessageId.IsEmpty() ? NewId() : InMessageId;
 	Envelope->SetStringField(TEXT("type"), Type);
 	Envelope->SetStringField(TEXT("message_id"), MessageId);
 	Envelope->SetStringField(TEXT("channel"), TEXT("app"));
@@ -1457,6 +1504,10 @@ bool FManalensClient::Enqueue(const FString& Type, const FString& InEvent, const
 		if (RecentEvents.Num() > Breadcrumbs)
 		{
 			RecentEvents.RemoveAt(0);
+		}
+		if (Hang)
+		{
+			Hang->SetBreadcrumbs(FString::Join(RecentEvents, TEXT(",")).Right(MaxString));
 		}
 	}
 	FQueueEntry& Entry = Queue.AddDefaulted_GetRef();
@@ -1896,11 +1947,11 @@ void FManalensClient::RaiseSendFailed(int32 Status, int32 Dropped)
 
 // Errors -----------------------------------------------------------------------
 
-void FManalensClient::RecordError(const FString& Message, const FManalensErrorOptions& Options, const FString& Source, const TSharedPtr<FJsonObject>& Extra)
+FString FManalensClient::RecordError(const FString& Message, const FManalensErrorOptions& Options, const FString& Source, const TSharedPtr<FJsonObject>& Extra, double At, const FString& MessageId, bool bTouch)
 {
 	if (!bInitialized || !bIdentityActive)
 	{
-		return;
+		return FString();
 	}
 	const bool bAuto = Source == SourceAuto;
 	const FString ErrorType = Options.ErrorType.Left(128);
@@ -1958,13 +2009,17 @@ void FManalensClient::RecordError(const FString& Message, const FManalensErrorOp
 	if (!ErrorAllowed(FingerprintValue, bAuto))
 	{
 		++ErrorsDropped;
-		return;
+		return FString();
 	}
-	Touch();
-	// BeforeSend runs in Enqueue, after the fingerprint and the limits.
-	if (!Enqueue(TEXT("track"), TEXT("error"), Props))
+	if (bTouch)
 	{
-		return;
+		Touch();
+	}
+	// BeforeSend runs in Enqueue, after the fingerprint and the limits.
+	const FString Id = MessageId.IsEmpty() ? NewId() : MessageId;
+	if (!Enqueue(TEXT("track"), TEXT("error"), Props, At, nullptr, Id))
+	{
+		return FString();
 	}
 	if (bAuto)
 	{
@@ -1972,6 +2027,211 @@ void FManalensClient::RecordError(const FString& Message, const FManalensErrorOp
 	}
 	// Keep the error on disk now: a crash can follow it.
 	SaveQueue();
+	return Id;
+}
+
+// Hangs (P-2833) ---------------------------------------------------------------
+
+void FManalensClient::StartHangWatchdog()
+{
+	if (Config.HangThresholdSeconds <= 0.0 || bServerQuiet || Hang)
+	{
+		return;
+	}
+	Hang = MakeUnique<FManalensHangWatchdog>(Config.HangThresholdSeconds, MonotonicNow, Now, [this](const FManalensHangWatchdog::FHang& Stuck) { SaveHang(Stuck); });
+	Hang->CaptureStackAddresses = CaptureHangStackAddresses;
+	Hang->SymbolizeStack = SymbolizeHangStack;
+	Hang->IsDebuggerPaused = IsHangDebuggerPaused;
+	if (Config.bHangWatchdogThread)
+	{
+		Hang->StartThread();
+	}
+}
+
+void FManalensClient::CheckHang()
+{
+	if (Hang)
+	{
+		Hang->Check();
+	}
+}
+
+void FManalensClient::SetHangPaused(bool bPaused)
+{
+	if (Hang)
+	{
+		Hang->SetPaused(FManalensHangWatchdog::EPauseCause::MapLoad, bPaused);
+	}
+}
+
+void FManalensClient::StopHangWatchdog()
+{
+	if (Hang)
+	{
+		Hang->StopThread();
+	}
+}
+
+FString FManalensClient::HangMessage(double Seconds)
+{
+	return FString::Printf(TEXT("The main thread was blocked for %.1f s"), Seconds);
+}
+
+void FManalensClient::SaveHang(const FManalensHangWatchdog::FHang& Stuck) const
+{
+	// The watchdog thread, while the game thread is stuck: write the hang at
+	// once, because the player may kill the game before it recovers.
+	TSharedRef<FJsonObject> File = MakeShared<FJsonObject>();
+	File->SetStringField(TEXT("message_id"), Stuck.MessageId);
+	File->SetStringField(TEXT("session_id"), Stuck.SessionId);
+	File->SetNumberField(TEXT("started_at"), Stuck.StartedAt);
+	File->SetNumberField(TEXT("threshold_s"), Stuck.ThresholdSeconds);
+	File->SetStringField(TEXT("breadcrumbs"), Stuck.Breadcrumbs);
+	if (!Stuck.Stack.IsEmpty())
+	{
+		File->SetStringField(TEXT("stack"), Stuck.Stack);
+	}
+	WriteAtomically(PathOf(HangFileName), ToJson(File));
+}
+
+void FManalensClient::RecordRecoveredHang(const FManalensHangWatchdog::FHang& Ended)
+{
+	// The game thread is back after a hang: send it once, with its duration.
+	FManalensErrorOptions Options;
+	Options.Severity = EManalensSeverity::Error;
+	Options.ErrorType = HangErrorType;
+	Options.bHandled = false;
+	Options.Stack = Ended.Stack;
+	TSharedPtr<FJsonObject> Extra = MakeShared<FJsonObject>();
+	const double DurationMs = FMath::RoundToDouble(Ended.DurationSeconds * 1000.0);
+	Extra->SetNumberField(TEXT("hang_duration_ms"), DurationMs);
+	const FString Id = RecordError(HangMessage(DurationMs / 1000.0), Options, SourceAuto, Extra, Ended.StartedAt, Ended.MessageId);
+	if (!Id.IsEmpty() && !SessionId.IsEmpty())
+	{
+		// A crash later in this session links to this hang.
+		SessionHangId = Id;
+		SaveSession();
+	}
+	// Remove the saved hang only now: the error is in the queue file. Keep the
+	// file of a newer hang that started since.
+	Hang->ClearSaved([this]() { IFileManager::Get().Delete(*PathOf(HangFileName), false, true, true); });
+}
+
+FString FManalensClient::SendSavedHang()
+{
+	const FString Path = PathOf(HangFileName);
+	FString Text;
+	if (!IFileManager::Get().FileExists(*Path) || !FFileHelper::LoadFileToString(Text, *Path))
+	{
+		return FString();
+	}
+	IFileManager::Get().Delete(*Path, false, true, true);
+	const TSharedPtr<FJsonObject> Saved = FromJson(Text);
+	FString Id;
+	if (!Saved.IsValid() || !Saved->TryGetStringField(TEXT("message_id"), Id) || Id.IsEmpty())
+	{
+		return FString();
+	}
+	for (const FQueueEntry& Entry : Queue)
+	{
+		if (Entry.MessageId == Id)
+		{
+			return Id; // Already queued: the game recovered, then was killed.
+		}
+	}
+	// Sent in its session, with the build of the run that hung.
+	const FString OwnSession = SessionId;
+	const FString OwnBuild = Config.Build;
+	const FString OwnVersion = Config.AppVersion;
+	FString Value;
+	if (Saved->TryGetStringField(TEXT("session_id"), Value) && !Value.IsEmpty())
+	{
+		SessionId = Value;
+	}
+	const TSharedPtr<FJsonObject>* Session = nullptr;
+	if (State->TryGetObjectField(TEXT("session"), Session))
+	{
+		(*Session)->TryGetStringField(TEXT("build"), Config.Build);
+		(*Session)->TryGetStringField(TEXT("app_version"), Config.AppVersion);
+	}
+	FManalensErrorOptions Options;
+	Options.Severity = EManalensSeverity::Error;
+	Options.ErrorType = HangErrorType;
+	Options.bHandled = false;
+	Saved->TryGetStringField(TEXT("stack"), Options.Stack);
+	TSharedPtr<FJsonObject> Extra = MakeShared<FJsonObject>();
+	FString Crumbs;
+	if (Saved->TryGetStringField(TEXT("breadcrumbs"), Crumbs) && !Crumbs.IsEmpty())
+	{
+		Extra->SetStringField(TEXT("breadcrumbs"), Crumbs.Right(MaxString));
+	}
+	double Threshold = 0.0;
+	double StartedAt = LastActivityAt;
+	Saved->TryGetNumberField(TEXT("threshold_s"), Threshold);
+	Saved->TryGetNumberField(TEXT("started_at"), StartedAt);
+	Id = RecordError(HangMessage(Threshold), Options, SourceAuto, Extra, StartedAt, Id, false);
+	SessionId = OwnSession;
+	Config.Build = OwnBuild;
+	Config.AppVersion = OwnVersion;
+	return Id;
+}
+
+TArray<uint64> FManalensClient::GameThreadStackAddresses()
+{
+	constexpr uint32 MaxDepth = 64;
+	uint64 Frames[MaxDepth] = {};
+	const uint32 Depth = FPlatformStackWalk::CaptureThreadStackBackTrace(GGameThreadId, Frames, MaxDepth);
+	TArray<uint64> Addresses;
+	Addresses.Reserve(Depth);
+	for (uint32 Index = 0; Index < Depth && Index < MaxDepth; ++Index)
+	{
+		if (Frames[Index] != 0)
+		{
+			Addresses.Add(Frames[Index]);
+		}
+	}
+	return Addresses;
+}
+
+FString FManalensClient::SymbolizeStack(const TArray<uint64>& Addresses)
+{
+	const TArray<FString> HomeDirs = { FPlatformProcess::UserHomeDir(), FPlatformProcess::UserDir() };
+	TArray<FString> Lines;
+	for (const uint64 Address : Addresses)
+	{
+		FProgramCounterSymbolInfo Info;
+		FPlatformStackWalk::ProgramCounterToSymbolInfo(Address, Info);
+		const FString Module = FPaths::GetCleanFilename(FString(ANSI_TO_TCHAR(Info.ModuleName)));
+		FString Function = FString(ANSI_TO_TCHAR(Info.FunctionName));
+		if (Function.IsEmpty())
+		{
+			Function = FString::Printf(TEXT("UnknownFunction+0x%llx"), static_cast<unsigned long long>(Info.OffsetInModule));
+		}
+		FString Line = (Module.IsEmpty() ? FString(TEXT("Unknown")) : Module) + TEXT("!") + Function;
+		const FString File = FString(ANSI_TO_TCHAR(Info.Filename));
+		if (!File.IsEmpty() && Info.LineNumber > 0)
+		{
+			Line += FString::Printf(TEXT(" [%s:%d]"), *FPaths::GetCleanFilename(File), Info.LineNumber);
+		}
+		// The signal handler that read the stack (macOS, Linux) is not the game's code.
+		if (Function.Contains(TEXT("_sigtramp")) || Function.Contains(TEXT("__restore_rt")))
+		{
+			Lines.Reset();
+			continue;
+		}
+		Lines.Add(CleanStackFrame(Line, HomeDirs));
+	}
+	FString Stack;
+	for (const FString& Line : Lines)
+	{
+		const FString Next = Stack.IsEmpty() ? Line : Stack + TEXT("\n") + Line;
+		if (Next.Len() > MaxCrashStack)
+		{
+			break;
+		}
+		Stack = Next;
+	}
+	return Stack;
 }
 
 bool FManalensClient::ErrorAllowed(const FString& FingerprintValue, bool bAuto)
@@ -2426,6 +2686,10 @@ void FManalensClient::SaveSession()
 	Session->SetBoolField(TEXT("exited"), false);
 	Session->SetStringField(TEXT("build"), Config.Build);
 	Session->SetStringField(TEXT("app_version"), Config.AppVersion);
+	if (!SessionHangId.IsEmpty())
+	{
+		Session->SetStringField(TEXT("hang_message_id"), SessionHangId);
+	}
 	State->SetObjectField(TEXT("session"), Session);
 	SaveState();
 }

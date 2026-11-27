@@ -9,12 +9,14 @@
 #include "HAL/PlatformMisc.h"
 #include "HAL/PlatformProcess.h"
 #include "Interfaces/IPluginManager.h"
+#include "Async/Async.h"
 #include "ManalensClient.h"
 #include "ManalensSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeLock.h"
 #include "Modules/ModuleManager.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -124,6 +126,7 @@ namespace ManalensTests
 			Client->Now = [this]() { return Time; };
 			Client->NewId = [this]() { return bSequentialIds ? FString::Printf(TEXT("00000000-0000-4000-8000-%012d"), NextId++) : FManalensClient::NewUuidV4(); };
 			Client->Random = []() { return 0.5; };
+			Client->MonotonicNow = [this]() { return Time; };
 			Client->OnSendFailed = [this](int32 InStatus, int32 Dropped) { SendFailed.Emplace(InStatus, Dropped); };
 			Client->Transport = [this](const FString& Url, const TArray<TPair<FString, FString>>& Headers, const FString& Body, FManalensSendDone Done)
 			{
@@ -1976,3 +1979,415 @@ bool FManalensSteamLinkOptionTest::RunTest(const FString& Parameters)
 	}
 	return true;
 }
+
+// Hang detection (P-2833) -------------------------------------------------------
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+namespace ManalensHangTests
+{
+	using namespace ManalensTests;
+
+	/** Init, then the warm-up frames. */
+	TSharedRef<FManalensClient> Warm(FHarness& H, const FManalensConfig& Config)
+	{
+		TSharedRef<FManalensClient> Client = H.Start(Config);
+		for (int32 Frame = 0; Frame <= FManalensHangWatchdog::WarmupFrames; ++Frame)
+		{
+			Client->Update();
+		}
+		return Client;
+	}
+
+	/** The game thread is stuck: no Update(), the watchdog checks every 250 ms. */
+	void Stall(FHarness& H, FManalensClient& Client, double Seconds)
+	{
+		for (double Waited = 0.0; Waited < Seconds; Waited += 0.25)
+		{
+			H.Time += 0.25;
+			Client.CheckHang();
+		}
+	}
+
+	bool Saved(const FHarness& H)
+	{
+		return IFileManager::Get().FileExists(*FPaths::Combine(H.Dir, FManalensClient::HangFileName));
+	}
+
+	TArray<TSharedPtr<FJsonObject>> Hangs(const FManalensClient& Client)
+	{
+		TArray<TSharedPtr<FJsonObject>> Out;
+		for (const TSharedPtr<FJsonObject>& Event : Queued(Client))
+		{
+			FString Type;
+			if (NameOf(Event) == TEXT("error") && Event->GetObjectField(TEXT("properties"))->TryGetStringField(TEXT("error_type"), Type) && Type == TEXT("app_hang"))
+			{
+				Out.Add(Event);
+			}
+		}
+		return Out;
+	}
+
+	/** The newest app_crash in the queue (the queue file keeps the events of earlier launches). */
+	TSharedPtr<FJsonObject> CrashOf(const FManalensClient& Client)
+	{
+		TSharedPtr<FJsonObject> Last;
+		for (const TSharedPtr<FJsonObject>& Event : Queued(Client))
+		{
+			if (NameOf(Event) == TEXT("app_crash"))
+			{
+				Last = Event->GetObjectField(TEXT("properties"));
+			}
+		}
+		return Last;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensHangRecoveredTest, "Manalens.Hang.WrittenWhileStuckAndSentOnce", ManalensTests::Flags)
+bool FManalensHangRecoveredTest::RunTest(const FString& Parameters)
+{
+	using namespace ManalensHangTests;
+	FHarness H;
+	H.bHold = true;
+	// The stack function is read at Init.
+	TSharedRef<FManalensClient> Hung = H.Make();
+	Hung->CaptureHangStackAddresses = []() { return TArray<uint64>{ 0x1234 }; };
+	Hung->SymbolizeHangStack = [](const TArray<uint64>& Addresses) { return Addresses.Num() == 1 && Addresses[0] == 0x1234 ? FString(TEXT("Game!Busy() [Busy.cpp:12]")) : FString(); };
+	Hung->Init(H.Config());
+	for (int32 Frame = 0; Frame <= FManalensHangWatchdog::WarmupFrames; ++Frame)
+	{
+		Hung->Update();
+	}
+	Hung->Track(TEXT("before_hang"));
+	const double StuckAt = H.Time;
+	Stall(H, *Hung, 6.0);
+	TestTrue(TEXT("written while the game thread is stuck"), Saved(H));
+	TestEqual(TEXT("not sent while stuck"), Hangs(*Hung).Num(), 0);
+	Hung->Update();
+	const TArray<TSharedPtr<FJsonObject>> Sent = Hangs(*Hung);
+	if (TestEqual(TEXT("one app_hang"), Sent.Num(), 1))
+	{
+		const TSharedPtr<FJsonObject> Props = Sent[0]->GetObjectField(TEXT("properties"));
+		TestEqual(TEXT("severity"), Props->GetStringField(TEXT("severity")), FString(TEXT("error")));
+		TestEqual(TEXT("source"), Props->GetStringField(TEXT("source")), FString(TEXT("auto")));
+		TestFalse(TEXT("handled false, as a killed hang and the web SDK"), Props->GetBoolField(TEXT("handled")));
+		TestEqual(TEXT("hang_duration_ms"), Props->GetNumberField(TEXT("hang_duration_ms")), 6000.0);
+		TestEqual(TEXT("stack of the game thread"), Props->GetStringField(TEXT("stack")), FString(TEXT("Game!Busy() [Busy.cpp:12]")));
+		TestEqual(TEXT("message: the real duration"), Props->GetStringField(TEXT("message")), FString(TEXT("The main thread was blocked for 6.0 s")));
+		TestTrue(TEXT("breadcrumbs"), Props->GetStringField(TEXT("breadcrumbs")).Contains(TEXT("before_hang")));
+		TestEqual(TEXT("time of the last frame"), Sent[0]->GetStringField(TEXT("original_timestamp")), FManalensClient::FormatTimestamp(StuckAt));
+		TestEqual(TEXT("session"), Sent[0]->GetStringField(TEXT("session_id")), Hung->GetSessionId());
+	}
+	TestFalse(TEXT("the saved hang is removed"), Saved(H));
+	Hung->Update();
+	TestEqual(TEXT("once per stuck period"), Hangs(*Hung).Num(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensHangKilledTest, "Manalens.Hang.KilledWhileStuckLinksTheCrash", ManalensTests::Flags)
+bool FManalensHangKilledTest::RunTest(const FString& Parameters)
+{
+	using namespace ManalensHangTests;
+	FHarness H;
+	H.bHold = true;
+	FString Session;
+	{
+		TSharedRef<FManalensClient> Hung = Warm(H, H.Config());
+		Session = Hung->GetSessionId();
+		Hung->Track(TEXT("before_hang"));
+		Stall(H, *Hung, 8.0);
+		TestTrue(TEXT("written while stuck"), Saved(H));
+		// The player kills the game: no Update(), no FinishShutdown().
+	}
+	H.Time += 60.0;
+	FManalensConfig Next = H.Config();
+	Next.Build = TEXT("572");
+	TSharedRef<FManalensClient> Client = H.Start(Next);
+	const TArray<TSharedPtr<FJsonObject>> Sent = Hangs(*Client);
+	const TSharedPtr<FJsonObject> Crash = CrashOf(*Client);
+	if (TestEqual(TEXT("one app_hang"), Sent.Num(), 1) && TestTrue(TEXT("app_crash"), Crash.IsValid()))
+	{
+		const TSharedPtr<FJsonObject> Props = Sent[0]->GetObjectField(TEXT("properties"));
+		TestEqual(TEXT("hang_message_id"), Crash->GetStringField(TEXT("hang_message_id")), Sent[0]->GetStringField(TEXT("message_id")));
+		TestEqual(TEXT("in the old session"), Sent[0]->GetStringField(TEXT("session_id")), Session);
+		TestEqual(TEXT("previous_session_id"), Crash->GetStringField(TEXT("previous_session_id")), Session);
+		TestFalse(TEXT("handled false"), Props->GetBoolField(TEXT("handled")));
+		TestFalse(TEXT("no duration for a hang that never ended"), Props->HasField(TEXT("hang_duration_ms")));
+		TestEqual(TEXT("message: the threshold"), Props->GetStringField(TEXT("message")), FString(TEXT("The main thread was blocked for 5.0 s")));
+		TestTrue(TEXT("breadcrumbs of the stuck run"), Props->GetStringField(TEXT("breadcrumbs")).Contains(TEXT("before_hang")));
+		TestEqual(TEXT("the build of the run that hung"), Sent[0]->GetObjectField(TEXT("context"))->GetObjectField(TEXT("app"))->GetStringField(TEXT("build")), FString(TEXT("571")));
+	}
+	// The queue file also has the events of the stuck launch: the hang comes just before app_crash.
+	const TArray<FString> Order = Names(Queued(*Client));
+	const int32 CrashAt = Order.Find(TEXT("app_crash"));
+	TestTrue(TEXT("the hang before app_crash"), CrashAt >= 1 && Order[CrashAt - 1] == TEXT("error"));
+	TestFalse(TEXT("the saved hang is removed"), Saved(H));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensHangLinkTest, "Manalens.Hang.CrashLaterInTheSessionLinks", ManalensTests::Flags)
+bool FManalensHangLinkTest::RunTest(const FString& Parameters)
+{
+	using namespace ManalensHangTests;
+	FHarness H;
+	H.bHold = true;
+	FString HangId;
+	{
+		TSharedRef<FManalensClient> Client = Warm(H, H.Config());
+		Stall(H, *Client, 6.0);
+		Client->Update();
+		const TArray<TSharedPtr<FJsonObject>> Sent = Hangs(*Client);
+		if (TestEqual(TEXT("one app_hang"), Sent.Num(), 1))
+		{
+			HangId = Sent[0]->GetStringField(TEXT("message_id"));
+		}
+		H.Time += 20.0;
+		Client->Update(); // A tick saves the session. Then the process dies.
+	}
+	H.Time += 60.0;
+	{
+		TSharedRef<FManalensClient> Next = H.Start();
+		const TSharedPtr<FJsonObject> Crash = CrashOf(*Next);
+		TestTrue(TEXT("app_crash links to the recovered hang"), Crash.IsValid() && Crash->GetStringField(TEXT("hang_message_id")) == HangId && !HangId.IsEmpty());
+		H.Time += 20.0;
+		Next->Update();
+	}
+	H.Time += 60.0;
+	{
+		TSharedRef<FManalensClient> Third = H.Start();
+		const TSharedPtr<FJsonObject> Crash = CrashOf(*Third);
+		TestTrue(TEXT("a crash without a hang has no hang_message_id"), Crash.IsValid() && !Crash->HasField(TEXT("hang_message_id")));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensHangNotCountedTest, "Manalens.Hang.NotCountedWhenPausedOrOff", ManalensTests::Flags)
+bool FManalensHangNotCountedTest::RunTest(const FString& Parameters)
+{
+	using namespace ManalensHangTests;
+	{
+		FHarness H;
+		H.bHold = true;
+		TSharedRef<FManalensClient> Client = H.Start();
+		Client->Update();
+		Stall(H, *Client, 8.0);
+		TestFalse(TEXT("not in the first frames (a long load)"), Saved(H));
+		for (int32 Frame = 0; Frame <= FManalensHangWatchdog::WarmupFrames; ++Frame)
+		{
+			Client->Update();
+		}
+		Client->SetFocused(false);
+		Client->Update();
+		Stall(H, *Client, 8.0);
+		TestFalse(TEXT("not while unfocused"), Saved(H));
+		Client->SetFocused(true);
+		Client->Update();
+		Client->SetHangPaused(true);
+		Stall(H, *Client, 8.0);
+		TestFalse(TEXT("not during a map load"), Saved(H));
+		// Separate flags: focus back during a map load does not end the map-load pause, and the reverse.
+		Client->SetFocused(false);
+		Client->SetFocused(true);
+		Client->Update();
+		Stall(H, *Client, 8.0);
+		TestFalse(TEXT("focus back during a map load: still paused"), Saved(H));
+		Client->SetFocused(false);
+		Client->SetHangPaused(false);
+		Stall(H, *Client, 8.0);
+		TestFalse(TEXT("map load done while unfocused: still paused"), Saved(H));
+		Client->SetFocused(true);
+		Client->SetHangPaused(false);
+		Client->Update();
+		Client->CheckHang();
+		H.Time += 3600.0;
+		Client->CheckHang();
+		TestFalse(TEXT("not when the whole process was suspended"), Saved(H));
+		Client->Update();
+		Stall(H, *Client, 6.0);
+		TestTrue(TEXT("a hang when focused"), Saved(H));
+		Client->SetConsent(false);
+		TestFalse(TEXT("consent withdrawal removes the saved hang"), Saved(H));
+	}
+	{
+		// A map load with no PostLoadMap (a failed load) does not turn detection off for the session.
+		FHarness H;
+		TSharedRef<FManalensClient> Client = Warm(H, H.Config());
+		Client->SetHangPaused(true);
+		H.Time += 30.0;
+		Client->Update();
+		Stall(H, *Client, 8.0);
+		TestFalse(TEXT("a frame soon after PreLoadMap: still paused"), Saved(H));
+		H.Time += FManalensHangWatchdog::MapLoadPauseTimeoutSeconds;
+		Client->Update();
+		Stall(H, *Client, 6.0);
+		TestTrue(TEXT("after the map-load timeout: a hang again"), Saved(H));
+	}
+	{
+		// Consent withdrawal and reset: stuck right after them, before any frame, no hang with old data.
+		for (int32 Change = 0; Change < 2; ++Change)
+		{
+			FHarness H;
+			H.bHold = true;
+			TSharedRef<FManalensClient> Client = Warm(H, H.Config());
+			const FString OldSession = Client->GetSessionId();
+			Client->Track(TEXT("before_change"));
+			Client->Update();
+			if (Change == 0)
+			{
+				Client->SetConsent(false);
+			}
+			else
+			{
+				Client->Reset();
+			}
+			Stall(H, *Client, 8.0);
+			TestFalse(Change == 0 ? TEXT("no hang saved after SetConsent(false)") : TEXT("no hang saved after Reset() before a frame"), Saved(H));
+			if (Change == 1)
+			{
+				Client->Update();
+				Stall(H, *Client, 6.0);
+				FString Text;
+				FFileHelper::LoadFileToString(Text, *FPaths::Combine(H.Dir, FManalensClient::HangFileName));
+				TestTrue(TEXT("Reset(): a hang after the next frame"), !Text.IsEmpty());
+				TestFalse(TEXT("Reset(): not the old session"), Text.Contains(OldSession));
+				TestFalse(TEXT("Reset(): not the old breadcrumbs"), Text.Contains(TEXT("before_change")));
+			}
+		}
+	}
+	{
+		// The threshold is clamped to 1 to 60 s.
+		FHarness H;
+		FManalensConfig Config = H.Config();
+		Config.HangThresholdSeconds = 0.3;
+		TSharedRef<FManalensClient> Client = Warm(H, Config);
+		Stall(H, *Client, 0.75);
+		TestFalse(TEXT("0.3 s is 1 s: not yet"), Saved(H));
+		Stall(H, *Client, 0.5);
+		TestTrue(TEXT("0.3 s is 1 s: a hang"), Saved(H));
+		TestEqual(TEXT("over 60 s is 60 s"), FManalensHangWatchdog(600.0, []() { return 0.0; }, []() { return 0.0; }, nullptr).GetThresholdSeconds(), 60.0);
+		TestEqual(TEXT("under 1 s is 1 s"), FManalensHangWatchdog(0.2, []() { return 0.0; }, []() { return 0.0; }, nullptr).GetThresholdSeconds(), 1.0);
+	}
+	{
+		FHarness H;
+		FManalensConfig Config = H.Config();
+		Config.HangThresholdSeconds = 0.0;
+		TSharedRef<FManalensClient> Client = Warm(H, Config);
+		Stall(H, *Client, 10.0);
+		TestFalse(TEXT("0 turns it off"), Saved(H));
+	}
+	{
+		FHarness H;
+		FManalensConfig Config = H.Config();
+		Config.HangThresholdSeconds = 2.0;
+		TSharedRef<FManalensClient> Client = Warm(H, Config);
+		Stall(H, *Client, 1.5);
+		TestFalse(TEXT("under the threshold"), Saved(H));
+		Stall(H, *Client, 1.0);
+		TestTrue(TEXT("over the threshold"), Saved(H));
+	}
+	{
+		FHarness H;
+		TSharedRef<FManalensClient> Client = H.Make();
+		Client->IsHangDebuggerPaused = []() { return true; };
+		Client->Init(H.Config());
+		for (int32 Frame = 0; Frame <= FManalensHangWatchdog::WarmupFrames; ++Frame)
+		{
+			Client->Update();
+		}
+		Stall(H, *Client, 10.0);
+		TestFalse(TEXT("not at a breakpoint"), Saved(H));
+	}
+	{
+		FHarness H;
+		H.bHold = true;
+		TSharedRef<FManalensClient> Client = H.Make();
+		Client->BeforeSend = [](TSharedPtr<FJsonObject> Event) -> TSharedPtr<FJsonObject>
+		{
+			const TSharedPtr<FJsonObject>* Props = nullptr;
+			FString Type;
+			if (Event->TryGetObjectField(TEXT("properties"), Props) && (*Props)->TryGetStringField(TEXT("error_type"), Type) && Type == TEXT("app_hang"))
+			{
+				return nullptr;
+			}
+			return Event;
+		};
+		Client->Init(H.Config());
+		for (int32 Frame = 0; Frame <= FManalensHangWatchdog::WarmupFrames; ++Frame)
+		{
+			Client->Update();
+		}
+		Stall(H, *Client, 6.0);
+		Client->Update();
+		TestEqual(TEXT("BeforeSend drops it"), Hangs(*Client).Num(), 0);
+		TestFalse(TEXT("dropped: the saved hang is removed"), Saved(H));
+	}
+	{
+		FHarness H;
+		H.bHold = true;
+		FManalensConfig Config = H.Config();
+		Config.MaxAutoErrorsPerSession = 1;
+		TSharedRef<FManalensClient> Client = Warm(H, Config);
+		Stall(H, *Client, 6.0);
+		Client->Update();
+		Stall(H, *Client, 6.0);
+		Client->Update();
+		TestEqual(TEXT("the error limits apply"), Hangs(*Client).Num(), 1);
+	}
+	{
+		FHarness H;
+		FManalensConfig Config = H.Config();
+		Config.bServerBuild = true;
+		TSharedRef<FManalensClient> Client = Warm(H, Config);
+		Stall(H, *Client, 10.0);
+		TestFalse(TEXT("not on a quiet server build"), Saved(H));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensHangThreadTest, "Manalens.Hang.WatchdogThreadAndGameThreadStack", ManalensTests::Flags)
+bool FManalensHangThreadTest::RunTest(const FString& Parameters)
+{
+	// A real watchdog thread and a real clock: the game thread (this test) is
+	// busy; the watchdog sees it and reads the game thread stack.
+	FThreadSafeBool bStuck(false);
+	FString Stack;
+	FCriticalSection StackMutex;
+	// Tests only: a threshold under the 1 s minimum.
+	TUniquePtr<FManalensHangWatchdog> WatchdogPtr = FManalensHangWatchdog::MakeForTests(0.2, []() { return FPlatformTime::Seconds(); }, []() { return FPlatformTime::Seconds(); },
+		[&](const FManalensHangWatchdog::FHang& Hang)
+		{
+			FScopeLock Lock(&StackMutex);
+			Stack = Hang.Stack;
+			if (!Hang.Stack.IsEmpty())
+			{
+				bStuck = true;
+			}
+		});
+	FManalensHangWatchdog& Watchdog = *WatchdogPtr;
+	Watchdog.CaptureStackAddresses = []() { return FManalensClient::GameThreadStackAddresses(); };
+	Watchdog.SymbolizeStack = [](const TArray<uint64>& Addresses) { return FManalensClient::SymbolizeStack(Addresses); };
+	FManalensHangWatchdog::FHang Ended;
+	for (int32 Frame = 0; Frame <= FManalensHangWatchdog::WarmupFrames; ++Frame)
+	{
+		Watchdog.Beat(true, TEXT("s"), Ended);
+	}
+	Watchdog.StartThread();
+	const double Deadline = FPlatformTime::Seconds() + 10.0;
+	while (!bStuck && FPlatformTime::Seconds() < Deadline)
+	{
+		// Busy on purpose: the game thread is stuck here.
+	}
+	const bool bBack = Watchdog.Beat(true, TEXT("s"), Ended);
+	Watchdog.StopThread();
+	TestTrue(TEXT("the watchdog thread saw the stuck game thread"), bBack);
+	TestTrue(TEXT("the duration is over the threshold"), Ended.DurationSeconds >= 0.2);
+	FScopeLock Lock(&StackMutex);
+#if PLATFORM_MAC || PLATFORM_WINDOWS || PLATFORM_LINUX
+	AddInfo(FString::Printf(TEXT("game thread stack: %s"), *Stack));
+	TestFalse(TEXT("a game thread stack"), Stack.IsEmpty());
+	TestTrue(TEXT("at most 1024 characters"), Stack.Len() <= 1024);
+#endif
+	return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS

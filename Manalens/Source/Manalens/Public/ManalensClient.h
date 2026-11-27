@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Dom/JsonObject.h"
+#include "ManalensHangWatchdog.h"
 #include "ManalensTypes.h"
 #include "Templates/Function.h"
 #include "Templates/SharedPointer.h"
@@ -70,6 +71,17 @@ struct MANALENS_API FManalensConfig
 	TArray<FString> CrashDirs;
 	/** The project name in CrashContext GameName (UE-<name>). Empty: any. */
 	FString CrashGameName;
+	/**
+	 * Hang detection (P-2833): an error with error_type app_hang when one frame
+	 * takes longer than this many seconds (the game thread is stuck). 0 turns it
+	 * off; other values are clamped to 1 to 60. Not on a quiet server build.
+	 */
+	double HangThresholdSeconds = 5.0;
+	/**
+	 * true: run the hang watchdog on its own thread (UManalensSubsystem).
+	 * false (tests): call CheckHang() to run one check.
+	 */
+	bool bHangWatchdogThread = false;
 };
 
 /** The result of one HTTP request. Status 0 is a network error. */
@@ -132,6 +144,13 @@ public:
 	static constexpr const TCHAR* StateFileName = TEXT("manalens_state.json");
 	static constexpr const TCHAR* QueueFileName = TEXT("manalens_queue.txt");
 	static constexpr const TCHAR* OptOutFileName = TEXT("manalens_optout");
+	/**
+	 * The hang that the watchdog thread saw while the game thread was stuck
+	 * (P-2833). The game thread sends it when it recovers; when the game was
+	 * killed during the hang, the next launch sends it.
+	 */
+	static constexpr const TCHAR* HangFileName = TEXT("manalens_hang.json");
+	static constexpr const TCHAR* HangErrorType = TEXT("app_hang");
 	/** LinkSteamTicket(): the identity of the Steam Web API ticket. The server accepts only this one. */
 	static constexpr const TCHAR* SteamTicketIdentity = TEXT("manalens");
 	/** LinkSteamTicket() waits for a 429 Retry-After of at most this many seconds, once. */
@@ -200,6 +219,21 @@ public:
 	 * Events recorded inside the callback are dropped.
 	 */
 	TFunction<TSharedPtr<FJsonObject>(TSharedPtr<FJsonObject>)> BeforeSend;
+	/** A monotonic clock in seconds for the hang watchdog (FPlatformTime::Seconds). Tests replace it. */
+	TFunction<double()> MonotonicNow;
+	/**
+	 * Watchdog thread: the raw stack addresses of the stuck game thread, read
+	 * under the watchdog lock (UManalensSubsystem: GameThreadStackAddresses).
+	 * Empty function: hangs have no stack.
+	 */
+	TFunction<TArray<uint64>()> CaptureHangStackAddresses;
+	/**
+	 * Watchdog thread, outside the watchdog lock: the stack text of the
+	 * addresses (UManalensSubsystem: SymbolizeStack).
+	 */
+	TFunction<FString(const TArray<uint64>&)> SymbolizeHangStack;
+	/** Watchdog thread: true while the game thread is stopped on purpose (a debugger or Blueprint breakpoint). */
+	TFunction<bool()> IsHangDebuggerPaused;
 
 	/** Checks the options and starts. Returns false and logs why when an option is wrong. */
 	bool Init(const FManalensConfig& InConfig);
@@ -255,6 +289,28 @@ public:
 	FString LinkUrl(const FString& Url) const;
 	/** Change the collector URL. */
 	void SetEndpoint(const FString& InEndpoint);
+	/** Runs one check of the hang watchdog now (tests; the subsystem runs it on a thread). */
+	void CheckHang();
+	/**
+	 * Any thread: no hang while bPaused is true (a map load). Focus loss needs no
+	 * call: SetFocused covers it with its own flag, so one does not clear the
+	 * other. A map load that never ends stops this pause after
+	 * FManalensHangWatchdog::MapLoadPauseTimeoutSeconds.
+	 */
+	void SetHangPaused(bool bPaused);
+	/** Stops the hang watchdog thread (quit). */
+	void StopHangWatchdog();
+	/**
+	 * The raw return addresses of the game thread, captured from another thread
+	 * with FPlatformStackWalk::CaptureThreadStackBackTrace (as the engine's hitch
+	 * detector does). Fast: no symbol lookup. Empty when the platform gives none.
+	 */
+	static TArray<uint64> GameThreadStackAddresses();
+	/**
+	 * The stack text of addresses: Module!Function [File:Line] frames, cleaned
+	 * of home folders, at most 1024 characters. Slow (symbol lookup).
+	 */
+	static FString SymbolizeStack(const TArray<uint64>& Addresses);
 
 	bool IsInitialized() const { return bInitialized; }
 	bool IsIdentityActive() const { return bIdentityActive; }
@@ -347,7 +403,7 @@ private:
 	/** The crash data of the session that started at StartedAt, or nullptr (crash stacks). */
 	TSharedPtr<FJsonObject> CrashData(double StartedAt);
 	/** Returns false when BeforeSend dropped the event. */
-	bool Enqueue(const FString& Type, const FString& Event, const TSharedPtr<FJsonObject>& Properties, double At = -1.0, const TSharedPtr<FJsonObject>& Traits = nullptr);
+	bool Enqueue(const FString& Type, const FString& Event, const TSharedPtr<FJsonObject>& Properties, double At = -1.0, const TSharedPtr<FJsonObject>& Traits = nullptr, const FString& InMessageId = FString());
 	/** Runs BeforeSend on a copy of the envelope. nullptr: drop the event. */
 	TSharedPtr<FJsonObject> ApplyBeforeSend(const TSharedRef<FJsonObject>& Envelope);
 	void Prune();
@@ -355,7 +411,20 @@ private:
 	/** Asks IsOffline(). On the change back to online, clears the backoff and the failure counter. */
 	bool CheckOffline();
 	void OnResponse(const FManalensHttpResult& Result, const TSet<FString>& Ids);
-	void RecordError(const FString& Message, const FManalensErrorOptions& Options, const FString& Source, const TSharedPtr<FJsonObject>& Extra);
+	/**
+	 * Returns the message_id of the queued error, or an empty string when it was
+	 * dropped. At, MessageId, and bTouch are for hangs (P-2833): the time and the
+	 * ID that the watchdog saved, and no session activity at the next launch.
+	 */
+	FString RecordError(const FString& Message, const FManalensErrorOptions& Options, const FString& Source, const TSharedPtr<FJsonObject>& Extra, double At = -1.0, const FString& MessageId = FString(), bool bTouch = true);
+	void StartHangWatchdog();
+	/** Watchdog thread: writes the hang file. Uses no client state but the storage folder. */
+	void SaveHang(const FManalensHangWatchdog::FHang& Hang) const;
+	void RecordRecoveredHang(const FManalensHangWatchdog::FHang& Hang);
+	/** Next launch: sends the hang that the game never recovered from. Returns its message_id, or empty. */
+	FString SendSavedHang();
+	/** The text of every app_hang (as the web SDK): the duration of a hang that ended, the threshold of one that never ended. */
+	static FString HangMessage(double Seconds);
 	bool ErrorAllowed(const FString& FingerprintValue, bool bAuto);
 	void ClearErrorHistory();
 	TSharedRef<FJsonObject> BuildContext() const;
@@ -433,6 +502,10 @@ private:
 	TArray<double> ErrorTimes;
 	int32 AutoErrors = 0;
 	int32 ErrorsDropped = 0;
+	/** Hang detection (P-2833); null when off. */
+	TUniquePtr<FManalensHangWatchdog> Hang;
+	/** The message_id of the last hang of this session (saved with the session, for app_crash). */
+	FString SessionHangId;
 	/** Set to false on destruction, so a late HTTP callback does nothing. */
 	TSharedRef<bool, ESPMode::ThreadSafe> Alive;
 };

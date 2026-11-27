@@ -3,9 +3,11 @@
 #include "ManalensSubsystem.h"
 
 #include "Async/Async.h"
+#include "CoreGlobals.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "HAL/PlatformMisc.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
 #include "HttpManager.h"
@@ -23,6 +25,7 @@
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemNames.h"
 #include "Interfaces/OnlineIdentityInterface.h"
+#include "UObject/UObjectGlobals.h"
 
 /** Collects Error (and optionally Warning) lines of the engine log from any thread. The subsystem sends them on the game thread. */
 class FManalensLogCapture : public FOutputDevice
@@ -139,10 +142,18 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		Config.CrashGameName = FApp::GetProjectName();
 	}
 	QuitTimeoutSeconds = FMath::Clamp(Settings->QuitTimeoutSeconds, 0.0f, 10.0f);
+	// Hang detection (P-2833): a watchdog thread, with the game thread stack.
+	Config.HangThresholdSeconds = FMath::Max(0.0f, Settings->HangThresholdSeconds);
+	Config.bHangWatchdogThread = true;
 
 	Client = MakeShared<FManalensClient>();
 	// No network (P-2853): skip the send, keep the events, and do not back off.
 	Client->IsOffline = []() { return FManalensClient::EngineReportsNoNetwork(); };
+	Client->CaptureHangStackAddresses = []() { return FManalensClient::GameThreadStackAddresses(); };
+	Client->SymbolizeHangStack = [](const TArray<uint64>& Addresses) { return FManalensClient::SymbolizeStack(Addresses); };
+	// A debugger or Blueprint breakpoint stops the game thread on purpose, and the
+	// editor's own slow tasks (loading, compiling) are not the game's hangs.
+	Client->IsHangDebuggerPaused = []() { return FPlatformMisc::IsDebuggerPresent() || GIntraFrameDebuggingGameThread || (GIsEditor && GIsSlowTask); };
 	TWeakObjectPtr<UManalensSubsystem> WeakThis(this);
 	Client->OnSendFailed = [WeakThis](int32 Status, int32 Dropped)
 	{
@@ -203,6 +214,9 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	FCoreDelegates::ApplicationHasReactivatedDelegate.AddUObject(this, &UManalensSubsystem::OnReactivate);
 	FCoreDelegates::ApplicationHasEnteredForegroundDelegate.AddUObject(this, &UManalensSubsystem::OnReactivate);
 	FCoreDelegates::GetApplicationWillTerminateDelegate().AddUObject(this, &UManalensSubsystem::OnTerminate);
+	// A map load blocks the game thread behind a loading screen: not a hang.
+	FCoreUObjectDelegates::PreLoadMap.AddUObject(this, &UManalensSubsystem::OnPreLoadMap);
+	FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &UManalensSubsystem::OnPostLoadMap);
 }
 
 void UManalensSubsystem::Deinitialize()
@@ -218,6 +232,8 @@ void UManalensSubsystem::Deinitialize()
 	FCoreDelegates::ApplicationHasReactivatedDelegate.RemoveAll(this);
 	FCoreDelegates::ApplicationHasEnteredForegroundDelegate.RemoveAll(this);
 	FCoreDelegates::GetApplicationWillTerminateDelegate().RemoveAll(this);
+	FCoreUObjectDelegates::PreLoadMap.RemoveAll(this);
+	FCoreUObjectDelegates::PostLoadMapWithWorld.RemoveAll(this);
 	if (LogCapture.IsValid())
 	{
 		if (GLog)
@@ -268,6 +284,22 @@ void UManalensSubsystem::OnReactivate()
 	if (Client.IsValid())
 	{
 		Client->SetFocused(true);
+	}
+}
+
+void UManalensSubsystem::OnPreLoadMap(const FString& MapName)
+{
+	if (Client.IsValid())
+	{
+		Client->SetHangPaused(true);
+	}
+}
+
+void UManalensSubsystem::OnPostLoadMap(UWorld* LoadedWorld)
+{
+	if (Client.IsValid())
+	{
+		Client->SetHangPaused(false);
 	}
 }
 

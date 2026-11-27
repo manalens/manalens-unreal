@@ -10,6 +10,7 @@
 #include "ManalensSubsystem.generated.h"
 
 class FManalensClient;
+class UWorld;
 class FManalensLogCapture;
 
 /**
@@ -125,6 +126,8 @@ private:
 	bool OnTick(float DeltaTime);
 	void OnDeactivate();
 	void OnReactivate();
+	void OnPreLoadMap(const FString& MapName);
+	void OnPostLoadMap(UWorld* LoadedWorld);
 	void OnTerminate();
 	void Shutdown();
 	static TSharedPtr<FJsonObject> ToJson(const TMap<FString, FString>& Strings, const TMap<FString, double>& Numbers, const TMap<FString, bool>& Flags);

@@ -88,6 +88,18 @@ After a crash, the next launch sends `app_crash`. On Windows, macOS, and Linux i
 - The plugin reads at most 256 KB, never sends the minidump or the log, never sends the same folder twice, and reads nothing before consent. Home folders, URLs, and emails are removed from the frames.
 - Turn it off with **Capture Crash Stacks** (Project Settings > Plugins > Manalens > Errors).
 
+## Hangs
+
+A frozen game that the player kills is an `app_crash` with no cause. The plugin also watches the game thread. A watchdog thread checks a heartbeat that the game thread writes once per frame. When one frame takes longer than **Hang Threshold Seconds** (default `5`; other values than `0` are clamped to 1 to 60), the game thread is stuck: the plugin sends an `error` with `error_type` `app_hang`, severity `error`, and `source` `auto`, once per stuck period.
+
+- The watchdog writes the hang to `Saved/Manalens/manalens_hang.json` while the game is stuck, so it is not lost when the player kills the game.
+- It reads the game thread stack addresses from the watchdog thread with `FPlatformStackWalk::CaptureThreadStackBackTrace` (as the engine's own hitch detector does), looks up the symbols after that (the game thread never waits for the lookup), and sends it as `stack`: `Module!Function [File:Line]` frames, at most 1024 characters. Home folders are removed. A build without symbols shows `UnknownFunction` frames.
+- Every hang has `handled` `false` and the message "The main thread was blocked for N s" (the same text as the web SDK). When the game recovers, the hang is sent with `hang_duration_ms`, and N is the real duration (one decimal). When the game was killed while stuck, the next launch sends the hang in the old session, N is the threshold, and `app_crash` gets `hang_message_id` (the `message_id` of the last hang of that session).
+- `SetConsent(false)` and `Reset()` also clear the session and the breadcrumbs that the watchdog keeps, so no hang with old data is saved after them.
+- No hang is counted while the game is in the background, during a map load (a load that never ends, with no PostLoadMap, turns detection back on after 120 s), at a debugger or Blueprint breakpoint, while the editor runs a slow task, in the first 10 frames, or on a dedicated server without **Track Server Builds**.
+- Hangs use the same error limits as other automatic errors, and `BeforeSend` can drop them.
+- Set **Hang Threshold Seconds** (Project Settings > Plugins > Manalens > Errors) to `0` to turn it off.
+
 ## BeforeSend
 
 `SetBeforeSend()` (C++) gets a copy of each event (track, identify, traits, error, automatic events) before it is queued. Return it (changed or not), or `nullptr` to drop it. The SDK takes `event`, `properties`, `traits`, and `user_id` from the result. If the result changes or removes `type`, `message_id`, `anonymous_id`, `session_id`, or `context.app`, the SDK sends the original event.
