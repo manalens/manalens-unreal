@@ -1800,7 +1800,7 @@ bool FManalensCrashParseTest::RunTest(const FString& Parameters)
 		Long += FString::Printf(TEXT("0x%08x Game!SomeVeryLongFunctionNameThatIsNotAToken_%d() [UnknownFile]) \n"), Index, Index);
 	}
 	const TSharedPtr<FJsonObject> Big = FManalensClient::ParseCrashContext(FString(TEXT("<CrashType>Crash</CrashType><ErrorMessage>Caught signal</ErrorMessage><CallStack>")) + Long + TEXT("</CallStack>"), FString(), {});
-	TestTrue(TEXT("stack at most 4096 characters"), Big->GetStringField(TEXT("stack")).Len() <= FManalensClient::MaxCrashStack);
+	TestTrue(TEXT("stack at most 1024 characters (the collector limit)"), Big->GetStringField(TEXT("stack")).Len() <= 1024);
 	TestFalse(TEXT("long names are not masked"), Big->GetStringField(TEXT("stack")).Contains(TEXT("[redacted]")));
 	return true;
 }

@@ -102,7 +102,7 @@ class MANALENS_API FManalensClient
 {
 public:
 	static constexpr const TCHAR* LibraryName = TEXT("Manalens Unreal SDK");
-	static constexpr const TCHAR* LibraryVersion = TEXT("0.5.1");
+	static constexpr const TCHAR* LibraryVersion = TEXT("0.5.2");
 	/** The source of an error: a Track Error call, or an automatic capture. */
 	static constexpr const TCHAR* SourceManual = TEXT("manual");
 	static constexpr const TCHAR* SourceAuto = TEXT("auto");
@@ -297,7 +297,8 @@ public:
 	 * ensure, or a stall). GameName empty: any game.
 	 */
 	static TSharedPtr<FJsonObject> ParseCrashContext(const FString& Xml, const FString& GameName, const TArray<FString>& HomeDirs);
-	static constexpr int32 MaxCrashStack = 4096;
+	/** The collector refuses a whole event with a property string over 1024 characters. */
+	static constexpr int32 MaxCrashStack = 1024;
 	static constexpr int64 MaxCrashFileBytes = 256 * 1024;
 	/** Log categories that are never captured: LogManalens, LogHttp, LogSlate, LogSteamShared, LogOnline*, and LogEOS*. */
 	static bool IsSkippedLogCategory(const FString& Category);

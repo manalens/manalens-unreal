@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2 (2026-11-27)
+
+- Fix: a crash stack longer than 1024 characters made the collector refuse the whole `app_crash` (`INVALID_EVENT`), so the crash was lost. The stack now keeps the top frames, at most 1024 characters, the collector limit for a property value. Found in a production test of the Godot SDK, which had the same limit.
+
 ## 0.5.1 (2026-11-27)
 
 - Crash stacks: the crash message gets the full log cleaning again, so a long token or a `password=` value in an assertion text is masked. Only Windows exception names (`EXCEPTION_ACCESS_VIOLATION` and others) are kept as they are.
