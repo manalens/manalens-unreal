@@ -886,6 +886,82 @@ bool FManalensSplitTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensOfflineTest, "Manalens.Retry.OfflineSkipsTheSend", Flags)
+bool FManalensOfflineTest::RunTest(const FString& Parameters)
+{
+	// P-2853: no network is not a failed send. No request, the events stay, no backoff.
+	{
+		FHarness H;
+		bool bOffline = true;
+		TSharedRef<FManalensClient> Client = H.Make();
+		Client->IsOffline = [&bOffline]() { return bOffline; };
+		Client->Init(H.Config());
+		int32 Flushed = 0;
+		Client->OnFlushed = [&Flushed](int32, bool) { ++Flushed; };
+		Client->Update();
+		Client->Flush();
+		for (int32 Index = 0; Index < 60; ++Index)
+		{
+			H.Time += 10; // 10 minutes of ticks.
+			Client->Update();
+		}
+		TestEqual(TEXT("offline: no request"), H.Requests.Num(), 0);
+		TestEqual(TEXT("offline: the events stay"), Client->GetQueueSize(), 2);
+		TestEqual(TEXT("offline: no backoff"), Client->GetBackoffUntil(), 0.0);
+		TestEqual(TEXT("offline: no OnFlushed"), Flushed, 0);
+		TestEqual(TEXT("offline: no send failed"), H.SendFailed.Num(), 0);
+		TestFalse(TEXT("offline: not sending, so a quit does not wait"), Client->IsSending());
+		// Online: the next tick sends at once.
+		bOffline = false;
+		H.Status = 503;
+		H.Time += 10;
+		Client->Update();
+		TestEqual(TEXT("online: sent at the next tick"), H.Requests.Num(), 1);
+		// The failure counter did not grow while offline: the first failure waits 2 s times the jitter.
+		TestTrue(TEXT("first failure: backoff of 1 to 2 seconds"), Client->GetBackoffUntil() >= H.Time + 1.0 && Client->GetBackoffUntil() <= H.Time + 2.0);
+	}
+	{
+		// Network errors while the engine still reports a network drive the backoff to 300 s.
+		FHarness H;
+		H.Status = 0;
+		bool bOffline = false;
+		TSharedRef<FManalensClient> Client = H.Make();
+		Client->Random = []() { return 0.999; };
+		Client->IsOffline = [&bOffline]() { return bOffline; };
+		Client->Init(H.Config());
+		for (int32 Attempt = 0; Attempt < 10; ++Attempt)
+		{
+			H.Time = FMath::Max(H.Time, Client->GetBackoffUntil()) + 0.01;
+			Client->Flush();
+		}
+		TestEqual(TEXT("10 failed sends"), H.Requests.Num(), 10);
+		TestTrue(TEXT("a network error backs off (300 s)"), Client->GetBackoffUntil() > H.Time + 250.0);
+		// The engine reports no network: the ticks start no request.
+		bOffline = true;
+		H.Time += 10;
+		Client->Update();
+		TestEqual(TEXT("offline: no request"), H.Requests.Num(), 10);
+		// The network is back long before the 300 s wait ends: the next tick sends.
+		bOffline = false;
+		H.Status = 202;
+		H.Time += 10;
+		Client->Update();
+		TestEqual(TEXT("back online: sent at once"), H.Requests.Num(), 11);
+		TestEqual(TEXT("back online: the queue is empty"), Client->GetQueueSize(), 0);
+		TestEqual(TEXT("back online: no backoff"), Client->GetBackoffUntil(), 0.0);
+	}
+	{
+		// The default client has no check: it sends as before.
+		FHarness H;
+		TSharedRef<FManalensClient> Client = H.Start();
+		Client->Update();
+		TestEqual(TEXT("no check: sent"), H.Requests.Num(), 1);
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensKeyTest, "Manalens.Keys.SecretKeyRefused", Flags)
 bool FManalensKeyTest::RunTest(const FString& Parameters)
 {

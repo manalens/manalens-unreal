@@ -116,6 +116,12 @@ public:
 	static constexpr double LinkMaxRetryAfterSeconds = 60.0;
 	/** Protected traits (P-2814): only a server with the secret key may set them. Traits() does not send them. */
 	static const TArray<FString>& ProtectedTraits();
+	/**
+	 * FPlatformMisc::GetNetworkConnectionType() is None or AirplaneMode. Only
+	 * those values count: Unknown (a platform without a network monitor, or an
+	 * older engine) and every connected type do not stop a send.
+	 */
+	static bool EngineReportsNoNetwork();
 
 	FManalensClient();
 	~FManalensClient();
@@ -126,6 +132,16 @@ public:
 	TFunction<FString()> NewId;
 	/** A number in [0, 1) for the backoff jitter. Tests replace it. */
 	TFunction<double()> Random;
+	/**
+	 * True when the engine reliably reports that the device has no network
+	 * (P-2853). Empty (default) or false: the client sends as usual.
+	 * UManalensSubsystem sets it to EngineReportsNoNetwork(). Called on the game
+	 * thread before each send. While it is true the client starts no request,
+	 * keeps the events, and does not change the failure counter or the backoff.
+	 * When it is false again, the client clears the backoff and sends at the
+	 * next tick.
+	 */
+	TFunction<bool()> IsOffline;
 	/** Sends one request. The default uses the engine HTTP module. */
 	FManalensTransport Transport;
 	/** Events were dropped and will never be sent. Status is the HTTP status of a refusal, or 0 when the SDK dropped them itself. */
@@ -282,6 +298,8 @@ private:
 	TSharedPtr<FJsonObject> ApplyBeforeSend(const TSharedRef<FJsonObject>& Envelope);
 	void Prune();
 	void TrySend();
+	/** Asks IsOffline(). On the change back to online, clears the backoff and the failure counter. */
+	bool CheckOffline();
 	void OnResponse(const FManalensHttpResult& Result, const TSet<FString>& Ids);
 	void RecordError(const FString& Message, const FManalensErrorOptions& Options, const FString& Source, const TSharedPtr<FJsonObject>& Extra);
 	bool ErrorAllowed(const FString& FingerprintValue, bool bAuto);
@@ -330,6 +348,8 @@ private:
 	double NextTickAt = 0.0;
 	double BackoffUntil = 0.0;
 	int32 Failures = 0;
+	/** The last IsOffline() result that TrySend() saw. */
+	bool bOffline = false;
 	/** The batch limit after a 413: half the last batch. Back to no limit after any 2xx. */
 	int32 BatchLimit = MAX_int32;
 	TOptional<TPair<FString, TSharedPtr<FJsonObject>>> DeferredIdentify;

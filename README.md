@@ -70,6 +70,12 @@ With the Steam Online Subsystem, get a Web API ticket for the identity `manalens
 - A refused ticket is not sent again. After a `429` with `Retry-After` (60 s or less), the plugin tries once more, but not after Set Consent (false) or Reset during the wait.
 - Say in your privacy notice that your game sends a Steam ticket to Manalens to confirm ownership.
 
+## No network
+
+The plugin keeps events on disk and sends them in batches. Before a send, it asks the engine for the network type (`FPlatformMisc::GetNetworkConnectionType()`). When the type is `None` or `AirplaneMode`, the plugin starts no request: the events stay in the queue, and the wait after failed sends does not grow. When the device has a network again, the next tick (**Flush Interval Seconds**) sends at once. `Unknown` and every connected type do not stop a send, so a real network error still waits and tries again (2 s, 4 s, and so on, at most 300 s).
+
+The engine reports `None` from its own network monitor: Network List Manager on Windows, the network interfaces on Linux, `NWPathMonitor` on macOS and iOS, and `ConnectivityManager` on Android (UE 5.8). An engine or platform without a monitor reports `Unknown`, and the plugin sends as before.
+
 ## BeforeSend
 
 `SetBeforeSend()` (C++) gets a copy of each event (track, identify, traits, error, automatic events) before it is queued. Return it (changed or not), or `nullptr` to drop it. The SDK takes `event`, `properties`, `traits`, and `user_id` from the result. If the result changes or removes `type`, `message_id`, `anonymous_id`, `session_id`, or `context.app`, the SDK sends the original event.

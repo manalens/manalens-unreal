@@ -3,6 +3,7 @@
 #include "ManalensClient.h"
 
 #include "HAL/FileManager.h"
+#include "HAL/PlatformMisc.h"
 #include "HAL/PlatformProcess.h"
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
@@ -1535,6 +1536,34 @@ void FManalensClient::Prune()
 	}
 }
 
+bool FManalensClient::EngineReportsNoNetwork()
+{
+	const ENetworkConnectionType Type = FPlatformMisc::GetNetworkConnectionType();
+	return Type == ENetworkConnectionType::None || Type == ENetworkConnectionType::AirplaneMode;
+}
+
+bool FManalensClient::CheckOffline()
+{
+	const bool bNow = IsOffline ? IsOffline() : false;
+	if (bNow == bOffline)
+	{
+		return bNow;
+	}
+	bOffline = bNow;
+	if (bNow)
+	{
+		UE_LOG(LogManalens, Verbose, TEXT("Manalens: no network: sends paused, %d events kept"), Queue.Num());
+	}
+	else
+	{
+		// The wait came from the time without a network: the first send after it goes at once.
+		BackoffUntil = 0.0;
+		Failures = 0;
+		UE_LOG(LogManalens, Verbose, TEXT("Manalens: network back: sending now"));
+	}
+	return bNow;
+}
+
 void FManalensClient::TrySend()
 {
 	if (!bIdentityActive || bSending || Queue.Num() == 0)
@@ -1543,6 +1572,13 @@ void FManalensClient::TrySend()
 		{
 			bFlushRequested = false;
 		}
+		return;
+	}
+	if (CheckOffline())
+	{
+		// No network: start no request and keep the events. Not a failure: the
+		// failure counter and the backoff do not change. The next tick asks again.
+		bFlushRequested = false;
 		return;
 	}
 	if (Now() < BackoffUntil)

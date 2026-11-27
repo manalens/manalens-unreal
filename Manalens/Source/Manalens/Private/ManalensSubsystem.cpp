@@ -127,6 +127,8 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	QuitTimeoutSeconds = FMath::Clamp(Settings->QuitTimeoutSeconds, 0.0f, 10.0f);
 
 	Client = MakeShared<FManalensClient>();
+	// No network (P-2853): skip the send, keep the events, and do not back off.
+	Client->IsOffline = []() { return FManalensClient::EngineReportsNoNetwork(); };
 	TWeakObjectPtr<UManalensSubsystem> WeakThis(this);
 	Client->OnSendFailed = [WeakThis](int32 Status, int32 Dropped)
 	{
