@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-11-27)
 
 - Breaking: standard names for error and crash events (the same in the Unity, Godot, and Unreal SDKs).
   - The crash event `app_unclean_exit` is now `app_crash`. Its properties (`previous_session_id`, `previous_build`, `previous_app_version`) and the rule that sends it do not change.
