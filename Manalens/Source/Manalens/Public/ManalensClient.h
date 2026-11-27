@@ -43,7 +43,7 @@ struct MANALENS_API FManalensConfig
 	bool bServerBuild = false;
 	/**
 	 * A dedicated server is not a player. false (default): on a server build the
-	 * client sends no game_open, session_start, session_end, or app_unclean_exit,
+	 * client sends no game_open, session_start, session_end, or app_crash,
 	 * so the server does not count as an install or a session. Track() and
 	 * Identify() still work. true: a server build sends them as a client does.
 	 */
@@ -83,6 +83,9 @@ class MANALENS_API FManalensClient
 public:
 	static constexpr const TCHAR* LibraryName = TEXT("Manalens Unreal SDK");
 	static constexpr const TCHAR* LibraryVersion = TEXT("0.2.0");
+	/** The source of an error: a Track Error call, or an automatic capture. */
+	static constexpr const TCHAR* SourceManual = TEXT("manual");
+	static constexpr const TCHAR* SourceAuto = TEXT("auto");
 	static constexpr double SessionTimeoutSeconds = 30.0 * 60.0;
 	static constexpr double SessionMaxAgeSeconds = 24.0 * 60.0 * 60.0;
 	/** The collector accepts app events up to 7 days old. Keep 1 hour of margin for clock skew. */
@@ -275,7 +278,7 @@ private:
 	void TrySend();
 	void OnResponse(const FManalensHttpResult& Result, const TSet<FString>& Ids);
 	void RecordError(const FString& Message, const FManalensErrorOptions& Options, const FString& Source, const TSharedPtr<FJsonObject>& Extra);
-	bool ErrorAllowed(const FString& FingerprintValue, bool bManual);
+	bool ErrorAllowed(const FString& FingerprintValue, bool bAuto);
 	void ClearErrorHistory();
 	TSharedRef<FJsonObject> BuildContext() const;
 	TSharedRef<FJsonObject> Fit(const TSharedPtr<FJsonObject>& Values, const TCHAR* Field) const;

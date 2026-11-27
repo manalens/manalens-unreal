@@ -98,7 +98,7 @@ public:
 
 	/**
 	 * A dedicated server is not a player. Off: a dedicated server sends no
-	 * game_open, sessions, or unclean exits, and is not counted as an install.
+	 * game_open, sessions, or app_crash events, and is not counted as an install.
 	 * Track and Identify still work. On: it sends them as a client does.
 	 */
 	UPROPERTY(config, EditAnywhere, Category = "Advanced")

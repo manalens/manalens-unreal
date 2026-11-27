@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Breaking: standard names for error and crash events (the same in the Unity, Godot, and Unreal SDKs).
+  - The crash event `app_unclean_exit` is now `app_crash`. Its properties (`previous_session_id`, `previous_build`, `previous_app_version`) and the rule that sends it do not change.
+  - The `source` property of an `error` event is now `manual` (a **Track Error** call) or `auto` (any automatic capture). The old value `unreal_log` is now `auto`. The engine is in `context.app.engine`.
+  - New `log_type` on an error from the engine log: the verbosity of the line, `error` or `warning` (warnings only with **Capture Log Warnings** on). `log_category` does not change. Fatal lines are not captured, so there is no `fatal` value.
+  - The per-session cap (`MaxAutoErrorsPerSession`) applies to `auto` errors only, as before.
+
 ## 0.2.0 (2026-11-27)
 
 - New **Traits** (`Traits()`, `TraitsJson()`, and `FManalensClient::Traits()`) (P-2814): set traits on this player, with or without a player ID. Before **Identify** the traits belong to the anonymous ID of this install. The protected traits `email`, `itch_user_id`, `stripe_customer_id`, and `paddle_customer_id` are not sent (one warning). Calls before consent are merged and sent after consent.

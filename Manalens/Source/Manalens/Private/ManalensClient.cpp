@@ -253,7 +253,7 @@ bool FManalensClient::Init(const FManalensConfig& InConfig)
 	bServerQuiet = Config.bServerBuild && !Config.bTrackServerBuilds;
 	if (bServerQuiet)
 	{
-		UE_LOG(LogManalens, Log, TEXT("Manalens: dedicated server; no game_open, session, or unclean exit events. Turn on Track Server Builds to send them"));
+		UE_LOG(LogManalens, Log, TEXT("Manalens: dedicated server; no game_open, session, or app_crash events. Turn on Track Server Builds to send them"));
 	}
 	LoadState();
 	NextTickAt = Now() + Config.FlushIntervalSeconds;
@@ -537,7 +537,7 @@ void FManalensClient::FinishLink(bool bLinked, int32 Status, const FString& Code
 
 void FManalensClient::TrackError(const FString& Message, const FManalensErrorOptions& Options, const TSharedPtr<FJsonObject>& Extra)
 {
-	RecordError(Message, Options, TEXT("manual"), Extra);
+	RecordError(Message, Options, SourceManual, Extra);
 }
 
 void FManalensClient::TrackLogError(const FString& Category, const FString& Message, bool bWarning)
@@ -552,10 +552,12 @@ void FManalensClient::TrackLogError(const FString& Category, const FString& Mess
 	Options.bHandled = false;
 	TSharedPtr<FJsonObject> Extra = MakeShared<FJsonObject>();
 	Extra->SetStringField(TEXT("log_category"), Category);
+	// The engine log level of the line (ELogVerbosity): only Error and Warning lines are captured.
+	Extra->SetStringField(TEXT("log_type"), bWarning ? TEXT("warning") : TEXT("error"));
 	// A log line can hold paths, URLs, emails, and tokens: clean it before it is
 	// queued. The fingerprint is computed from the cleaned text, so the same error
 	// on two machines with different user names groups together.
-	RecordError(CleanLogMessage(Message), Options, TEXT("unreal_log"), Extra);
+	RecordError(CleanLogMessage(Message), Options, SourceAuto, Extra);
 }
 
 bool FManalensClient::IsSkippedLogCategory(const FString& Category)
@@ -1209,7 +1211,7 @@ void FManalensClient::StartIdentity()
 					Crash->SetStringField(FString(TEXT("previous_")) + Key, Value);
 				}
 			}
-			Enqueue(TEXT("track"), TEXT("app_unclean_exit"), Crash, LastActivityAt);
+			Enqueue(TEXT("track"), TEXT("app_crash"), Crash, LastActivityAt);
 		}
 		EndSession(LastActivityAt);
 	}
@@ -1224,7 +1226,7 @@ void FManalensClient::StartIdentity()
 		Enqueue(TEXT("track"), TEXT("game_open"), Open);
 	}
 	SaveState();
-	// Write game_open (the install signal) and app_unclean_exit to disk before
+	// Write game_open (the install signal) and app_crash to disk before
 	// any send: a process killed before the next save would lose them.
 	SaveQueue();
 	if (DeferredIdentify.IsSet())
@@ -1774,7 +1776,7 @@ void FManalensClient::RecordError(const FString& Message, const FManalensErrorOp
 	{
 		return;
 	}
-	const bool bManual = Source == TEXT("manual");
+	const bool bAuto = Source == SourceAuto;
 	const FString ErrorType = Options.ErrorType.Left(128);
 	const FString File = Options.File.Left(256);
 	const FString Function = Options.Function.Left(256);
@@ -1827,7 +1829,7 @@ void FManalensClient::RecordError(const FString& Message, const FManalensErrorOp
 			Props->SetField(Key, Pair.Value);
 		}
 	}
-	if (!ErrorAllowed(FingerprintValue, bManual))
+	if (!ErrorAllowed(FingerprintValue, bAuto))
 	{
 		++ErrorsDropped;
 		return;
@@ -1838,7 +1840,7 @@ void FManalensClient::RecordError(const FString& Message, const FManalensErrorOp
 	{
 		return;
 	}
-	if (!bManual)
+	if (bAuto)
 	{
 		++AutoErrors;
 	}
@@ -1846,7 +1848,7 @@ void FManalensClient::RecordError(const FString& Message, const FManalensErrorOp
 	SaveQueue();
 }
 
-bool FManalensClient::ErrorAllowed(const FString& FingerprintValue, bool bManual)
+bool FManalensClient::ErrorAllowed(const FString& FingerprintValue, bool bAuto)
 {
 	const double At = Now();
 	if (const double* Last = ErrorSeen.Find(FingerprintValue))
@@ -1861,7 +1863,7 @@ bool FManalensClient::ErrorAllowed(const FString& FingerprintValue, bool bManual
 	{
 		return false;
 	}
-	if (!bManual && AutoErrors >= Config.MaxAutoErrorsPerSession)
+	if (bAuto && AutoErrors >= Config.MaxAutoErrorsPerSession)
 	{
 		return false;
 	}

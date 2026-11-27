@@ -382,7 +382,7 @@ bool FManalensPayloadTest::RunTest(const FString& Parameters)
 	const TArray<TSharedPtr<FJsonObject>> First = H.Requests[0].Events();
 	const TArray<TSharedPtr<FJsonObject>> Second = H.Requests[1].Events();
 	TestEqual(TEXT("first request"), FString::Join(Names(First), TEXT(",")), FString(TEXT("session_start,game_open,level_start,resource,traits,identify,error,error")));
-	TestEqual(TEXT("second request"), FString::Join(Names(Second), TEXT(",")), FString(TEXT("app_unclean_exit,session_end,session_start,game_open,level_complete,session_end")));
+	TestEqual(TEXT("second request"), FString::Join(Names(Second), TEXT(",")), FString(TEXT("app_crash,session_end,session_start,game_open,level_complete,session_end")));
 	TestEqual(TEXT("the manual error has the same fingerprint as in the Godot and Unity SDKs"), First[6]->GetObjectField(TEXT("properties"))->GetStringField(TEXT("fingerprint")), FString(TEXT("38d0e3d0139dea87")));
 	TestTrue(TEXT("integers have no fraction"), H.Requests[0].Body.Contains(TEXT("\"amount\":25,")) && H.Requests[0].Body.Contains(TEXT("\"big\":9000000000,")));
 	TestTrue(TEXT("short decimals"), H.Requests[0].Body.Contains(TEXT("\"float\":0.1,")) && H.Requests[0].Body.Contains(TEXT("\"price\":4.99,")));
@@ -428,10 +428,12 @@ bool FManalensPayloadTest::RunTest(const FString& Parameters)
 			U->GetObjectField(TEXT("context"))->SetStringField(TEXT("library_version"), FManalensClient::LibraryVersion);
 			U->SetStringField(TEXT("version"), FManalensClient::LibraryVersion);
 			FString Source;
-			if (U->GetObjectField(TEXT("properties"))->TryGetStringField(TEXT("source"), Source) && Source == TEXT("unity_log"))
+			if (U->GetObjectField(TEXT("properties"))->TryGetStringField(TEXT("source"), Source) && Source == TEXT("auto"))
 			{
 				// An engine log error: Unity and Unreal logs differ. Compare the envelope only.
-				TestEqual(TEXT("log error source"), O->GetObjectField(TEXT("properties"))->GetStringField(TEXT("source")), FString(TEXT("unreal_log")));
+				TestEqual(TEXT("log error source"), O->GetObjectField(TEXT("properties"))->GetStringField(TEXT("source")), FString(TEXT("auto")));
+				TestEqual(TEXT("log error log_type"), O->GetObjectField(TEXT("properties"))->GetStringField(TEXT("log_type")), FString(TEXT("error")));
+				TestEqual(TEXT("log error log_category"), O->GetObjectField(TEXT("properties"))->GetStringField(TEXT("log_category")), FString(TEXT("LogTemp")));
 				U->RemoveField(TEXT("properties"));
 				O->RemoveField(TEXT("properties"));
 			}
@@ -618,7 +620,7 @@ bool FManalensServerBuildTest::RunTest(const FString& Parameters)
 {
 	// G-2533: a dedicated server is not a player. Two launches: the first ends
 	// without a quit (a crash), the second quits.
-	const TArray<FString> Automatic = { TEXT("game_open"), TEXT("session_start"), TEXT("session_end"), TEXT("app_unclean_exit") };
+	const TArray<FString> Automatic = { TEXT("game_open"), TEXT("session_start"), TEXT("session_end"), TEXT("app_crash") };
 	for (const bool bTrack : { false, true })
 	{
 		FHarness H;
