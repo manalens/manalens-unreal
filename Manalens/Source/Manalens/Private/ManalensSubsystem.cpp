@@ -12,7 +12,9 @@
 #include "HttpModule.h"
 #include "ManalensClient.h"
 #include "ManalensSettings.h"
+#include "Misc/App.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Misc/Paths.h"
 #include "Misc/CoreDelegates.h"
 #include "Misc/OutputDevice.h"
 #include "Misc/OutputDeviceRedirector.h"
@@ -124,6 +126,14 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Config.FlushAt = Settings->FlushAt;
 	Config.MaxQueue = Settings->MaxQueue;
 	Config.MaxAutoErrorsPerSession = Settings->MaxAutoErrorsPerSession;
+	// Crash stacks: the engine writes crash folders to the project Saved/Crashes
+	// (Windows, Linux) or to the engine user folder (macOS). Not in the editor.
+	Config.bCaptureCrashStacks = Settings->bCaptureCrashStacks;
+	if (!GIsEditor)
+	{
+		Config.CrashDirs = { FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Crashes")), FPaths::Combine(FPaths::GameAgnosticSavedDir(), TEXT("Crashes")) };
+		Config.CrashGameName = FApp::GetProjectName();
+	}
 	QuitTimeoutSeconds = FMath::Clamp(Settings->QuitTimeoutSeconds, 0.0f, 10.0f);
 
 	Client = MakeShared<FManalensClient>();

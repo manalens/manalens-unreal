@@ -48,6 +48,20 @@ struct MANALENS_API FManalensConfig
 	 * Identify() still work. true: a server build sends them as a client does.
 	 */
 	bool bTrackServerBuilds = false;
+	/**
+	 * Crash stacks (sdks/SPEC.md, P-2831). At the next launch on Windows, macOS,
+	 * and Linux, add the crash data that the engine wrote for the crashed run
+	 * (CrashContext.runtime-xml in a crash folder) to app_crash.
+	 */
+	bool bCaptureCrashStacks = true;
+	/**
+	 * Folders that hold crash folders (each with CrashContext.runtime-xml).
+	 * Empty: none. UManalensSubsystem sets Saved/Crashes of the project and the
+	 * engine user folder (macOS writes there).
+	 */
+	TArray<FString> CrashDirs;
+	/** The project name in CrashContext GameName (UE-<name>). Empty: any. */
+	FString CrashGameName;
 };
 
 /** The result of one HTTP request. Status 0 is a network error. */
@@ -88,7 +102,7 @@ class MANALENS_API FManalensClient
 {
 public:
 	static constexpr const TCHAR* LibraryName = TEXT("Manalens Unreal SDK");
-	static constexpr const TCHAR* LibraryVersion = TEXT("0.4.0");
+	static constexpr const TCHAR* LibraryVersion = TEXT("0.5.0");
 	/** The source of an error: a Track Error call, or an automatic capture. */
 	static constexpr const TCHAR* SourceManual = TEXT("manual");
 	static constexpr const TCHAR* SourceAuto = TEXT("auto");
@@ -270,6 +284,21 @@ public:
 	 */
 	static FString CleanLogMessage(const FString& Message);
 	static FString CleanLogMessage(const FString& Message, const TArray<FString>& HomeDirs);
+	/**
+	 * A crash stack frame without personal data: home folders become ~, URLs lose
+	 * user:pass@, the query, and the fragment, and emails become [email]. Long
+	 * names stay: a C++ symbol is code, not a token.
+	 */
+	static FString CleanStackFrame(const FString& Frame, const TArray<FString>& HomeDirs);
+	/**
+	 * The app_crash properties from a CrashContext.runtime-xml (crash stacks):
+	 * stack, error_type, message, fingerprint, crash_source, symbolicated.
+	 * nullptr when the file is not a crash of this game (another GameName, an
+	 * ensure, or a stall). GameName empty: any game.
+	 */
+	static TSharedPtr<FJsonObject> ParseCrashContext(const FString& Xml, const FString& GameName, const TArray<FString>& HomeDirs);
+	static constexpr int32 MaxCrashStack = 4096;
+	static constexpr int64 MaxCrashFileBytes = 256 * 1024;
 	/** Log categories that are never captured: LogManalens, LogHttp, LogSlate, LogSteamShared, LogOnline*, and LogEOS*. */
 	static bool IsSkippedLogCategory(const FString& Category);
 	/**
@@ -292,6 +321,8 @@ private:
 	void StartSession(double At);
 	void EndSession(double At);
 	void Touch();
+	/** The crash data of the session that started at StartedAt, or nullptr (crash stacks). */
+	TSharedPtr<FJsonObject> CrashData(double StartedAt);
 	/** Returns false when BeforeSend dropped the event. */
 	bool Enqueue(const FString& Type, const FString& Event, const TSharedPtr<FJsonObject>& Properties, double At = -1.0, const TSharedPtr<FJsonObject>& Traits = nullptr);
 	/** Runs BeforeSend on a copy of the envelope. nullptr: drop the event. */

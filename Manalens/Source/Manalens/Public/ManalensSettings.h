@@ -80,6 +80,14 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Errors", meta = (ClampMin = "0"))
 	int32 MaxAutoErrorsPerSession = 50;
 
+	/**
+	 * Windows, macOS, Linux: at the next launch, add the crash stack that the engine
+	 * wrote for the crashed run (Saved/Crashes, CrashContext.runtime-xml) to app_crash.
+	 * macOS writes it only when the build includes the crash reporter.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Errors")
+	bool bCaptureCrashStacks = true;
+
 	/** Seconds between sends. */
 	UPROPERTY(config, EditAnywhere, Category = "Advanced", meta = (ClampMin = "1"))
 	float FlushIntervalSeconds = 10.0f;

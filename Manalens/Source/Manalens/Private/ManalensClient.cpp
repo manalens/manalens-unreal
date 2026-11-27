@@ -15,6 +15,7 @@
 #include "Misc/Guid.h"
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
+#include "Internationalization/Regex.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -919,6 +920,19 @@ FString FManalensClient::CleanLogMessage(const FString& Message, const TArray<FS
 	return Text;
 }
 
+FString FManalensClient::CleanStackFrame(const FString& Frame, const TArray<FString>& HomeDirs)
+{
+	FString Text = Frame;
+	for (const FString& Dir : HomeDirs)
+	{
+		ManalensClean::ReplaceDir(Text, Dir);
+	}
+	ManalensClean::ReplaceHomePatterns(Text);
+	ManalensClean::CleanUrls(Text);
+	ManalensClean::MaskEmails(Text);
+	return Text;
+}
+
 FString FManalensClient::CleanLogMessage(const FString& Message)
 {
 	// The home folder first, so a path under it keeps the rest of its name.
@@ -1210,6 +1224,13 @@ void FManalensClient::StartIdentity()
 				if (Session->TryGetStringField(Key, Value) && !Value.IsEmpty())
 				{
 					Crash->SetStringField(FString(TEXT("previous_")) + Key, Value);
+				}
+			}
+			if (const TSharedPtr<FJsonObject> Data = CrashData(SessionStartedAt))
+			{
+				for (const auto& Pair : Data->Values)
+				{
+					Crash->SetField(Pair.Key, Pair.Value);
 				}
 			}
 			Enqueue(TEXT("track"), TEXT("app_crash"), Crash, LastActivityAt);
@@ -1941,6 +1962,257 @@ FString FManalensClient::Fingerprint(const FString& ErrorType, const FString& Me
 	uint8 Hash[FSHA1::DigestSize];
 	FSHA1::HashBuffer(Utf8.Get(), Utf8.Length(), Hash);
 	return BytesToHex(Hash, FSHA1::DigestSize).ToLower().Left(16);
+}
+
+// Crash stacks (sdks/SPEC.md, P-2831) ----------------------------------------------
+
+namespace ManalensCrash
+{
+	/** The text of the first <Tag>...</Tag>, with the XML entities decoded. */
+	FString XmlField(const FString& Xml, const TCHAR* Tag)
+	{
+		const FString Open = FString::Printf(TEXT("<%s>"), Tag);
+		const FString Close = FString::Printf(TEXT("</%s>"), Tag);
+		const int32 Start = Xml.Find(Open, ESearchCase::CaseSensitive);
+		if (Start == INDEX_NONE)
+		{
+			return FString();
+		}
+		const int32 From = Start + Open.Len();
+		const int32 End = Xml.Find(Close, ESearchCase::CaseSensitive, ESearchDir::FromStart, From);
+		if (End == INDEX_NONE)
+		{
+			return FString();
+		}
+		FString Text = Xml.Mid(From, End - From);
+		Text.ReplaceInline(TEXT("&lt;"), TEXT("<"));
+		Text.ReplaceInline(TEXT("&gt;"), TEXT(">"));
+		Text.ReplaceInline(TEXT("&apos;"), TEXT("'"));
+		Text.ReplaceInline(TEXT("&quot;"), TEXT("\""));
+		Text.ReplaceInline(TEXT("&amp;"), TEXT("&"));
+		return Text;
+	}
+
+	/** One CallStack line ("0x047baa34 Game!Function(int*) [File.cpp:12]) ") as "Game!Function(int*) [File.cpp:12]". */
+	FString Frame(const FString& Line)
+	{
+		FString Text = Line.TrimStartAndEnd();
+		if (Text.StartsWith(TEXT("0x")))
+		{
+			int32 Space = INDEX_NONE;
+			if (Text.FindChar(TEXT(' '), Space))
+			{
+				Text = Text.Mid(Space + 1).TrimStart();
+			}
+		}
+		if (Text.EndsWith(TEXT("])")))
+		{
+			Text.LeftChopInline(1);
+		}
+		for (const TCHAR* Unknown : { TEXT(" [UnknownFile]"), TEXT(" []") })
+		{
+			if (Text.EndsWith(Unknown))
+			{
+				Text.LeftChopInline(FCString::Strlen(Unknown));
+			}
+		}
+		return Text.TrimEnd();
+	}
+
+	FString ErrorType(const FString& Message, const FString& CrashType)
+	{
+		FRegexMatcher Exception(FRegexPattern(TEXT("(EXCEPTION_[A-Z_]+)")), Message);
+		if (Exception.FindNext())
+		{
+			return Exception.GetCaptureGroup(1);
+		}
+		FRegexMatcher Signal(FRegexPattern(TEXT("signal (\\d+)")), Message);
+		if (Signal.FindNext())
+		{
+			switch (FCString::Atoi(*Signal.GetCaptureGroup(1)))
+			{
+			case 4: return TEXT("SIGILL");
+			case 5: return TEXT("SIGTRAP");
+			case 6: return TEXT("SIGABRT");
+			case 7: return TEXT("SIGBUS");
+			case 8: return TEXT("SIGFPE");
+			case 11: return TEXT("SIGSEGV");
+			default: return FString::Printf(TEXT("signal %s"), *Signal.GetCaptureGroup(1));
+			}
+		}
+		if (Message.Contains(TEXT("Segmentation fault")))
+		{
+			return TEXT("SIGSEGV");
+		}
+		if (CrashType == TEXT("Assert") || Message.StartsWith(TEXT("Assertion failed")))
+		{
+			return TEXT("assert");
+		}
+		return TEXT("crash");
+	}
+
+	FString Hash(const FString& Basis)
+	{
+		const FTCHARToUTF8 Utf8(*Basis);
+		uint8 Digest[FSHA1::DigestSize];
+		FSHA1::HashBuffer(Utf8.Get(), Utf8.Length(), Digest);
+		return BytesToHex(Digest, FSHA1::DigestSize).ToLower().Left(16);
+	}
+}
+
+TSharedPtr<FJsonObject> FManalensClient::ParseCrashContext(const FString& Xml, const FString& GameName, const TArray<FString>& HomeDirs)
+{
+	const FString CrashType = ManalensCrash::XmlField(Xml, TEXT("CrashType"));
+	if (CrashType == TEXT("Ensure") || CrashType == TEXT("Stall") || CrashType == TEXT("AbnormalShutdown"))
+	{
+		return nullptr; // Not a crash: the game went on (an ensure or a hang report).
+	}
+	if (!GameName.IsEmpty())
+	{
+		const FString InFile = ManalensCrash::XmlField(Xml, TEXT("GameName"));
+		if (InFile != GameName && InFile != FString(TEXT("UE-")) + GameName)
+		{
+			return nullptr; // Another game of the same engine version (the macOS folder is shared).
+		}
+	}
+	TArray<FString> Lines;
+	ManalensCrash::XmlField(Xml, TEXT("CallStack")).ParseIntoArrayLines(Lines);
+	TArray<FString> Frames;
+	for (const FString& Line : Lines)
+	{
+		const FString Frame = CleanStackFrame(ManalensCrash::Frame(Line), HomeDirs);
+		if (!Frame.IsEmpty())
+		{
+			Frames.Add(Frame);
+		}
+	}
+	FString Message = ManalensCrash::XmlField(Xml, TEXT("ErrorMessage")).TrimStartAndEnd();
+	int32 LineEnd = INDEX_NONE;
+	if (Message.FindChar(TEXT('\n'), LineEnd))
+	{
+		Message = Message.Left(LineEnd).TrimEnd();
+	}
+	if (Frames.Num() == 0 && Message.IsEmpty())
+	{
+		return nullptr;
+	}
+	const FString Type = ManalensCrash::ErrorType(Message, CrashType);
+	TSharedPtr<FJsonObject> Out = MakeShared<FJsonObject>();
+	Out->SetStringField(TEXT("error_type"), Type);
+	// The message: as a frame, plus the key=value masking. Not the long-token
+	// rule: it would mask EXCEPTION_ACCESS_VIOLATION.
+	FString CleanMessage = CleanStackFrame(Message.IsEmpty() ? FString(TEXT("The game crashed")) : Message, HomeDirs);
+	ManalensClean::MaskKeyValues(CleanMessage);
+	Out->SetStringField(TEXT("message"), CleanMessage.Left(MaxString));
+	Out->SetStringField(TEXT("crash_source"), TEXT("unreal_crash_folder"));
+	if (Frames.Num() == 0)
+	{
+		return Out;
+	}
+	FString Stack;
+	for (const FString& Frame : Frames)
+	{
+		const FString Next = Stack.IsEmpty() ? Frame : Stack + TEXT("\n") + Frame;
+		if (Next.Len() > MaxCrashStack)
+		{
+			break;
+		}
+		Stack = Next;
+	}
+	Out->SetStringField(TEXT("stack"), Stack);
+	// A frame has a name when it is Module!Function, not Module!UnknownFunction or an address.
+	bool bSymbolicated = false;
+	for (const FString& Frame : Frames)
+	{
+		int32 Bang = INDEX_NONE;
+		if (Frame.FindChar(TEXT('!'), Bang))
+		{
+			const FString Name = Frame.Mid(Bang + 1);
+			if (!Name.StartsWith(TEXT("UnknownFunction")) && !Name.StartsWith(TEXT("0x")) && !Name.IsEmpty())
+			{
+				bSymbolicated = true;
+				break;
+			}
+		}
+	}
+	Out->SetBoolField(TEXT("symbolicated"), bSymbolicated);
+	FString Basis = Type;
+	const FRegexPattern Noise(TEXT("0x[0-9a-fA-F]+|\\[[^\\]]*\\]|\\+\\s*[0-9a-fA-Fx]+|:\\d+|\\s+"));
+	for (int32 Index = 0; Index < FMath::Min(Frames.Num(), 5); ++Index)
+	{
+		FString Normal;
+		FRegexMatcher Matcher(Noise, Frames[Index]);
+		int32 Last = 0;
+		while (Matcher.FindNext())
+		{
+			Normal += Frames[Index].Mid(Last, Matcher.GetMatchBeginning() - Last);
+			Last = Matcher.GetMatchEnding();
+		}
+		Normal += Frames[Index].Mid(Last);
+		Basis += TEXT("|") + Normal;
+	}
+	Out->SetStringField(TEXT("fingerprint"), ManalensCrash::Hash(Basis));
+	return Out;
+}
+
+TSharedPtr<FJsonObject> FManalensClient::CrashData(double StartedAt)
+{
+	const FString Platform = Config.Platform.IsEmpty() ? BuildPlatform() : Config.Platform;
+	if (!Config.bCaptureCrashStacks || Config.CrashDirs.Num() == 0 || !(Platform == TEXT("windows") || Platform == TEXT("macos") || Platform == TEXT("linux")))
+	{
+		return nullptr;
+	}
+	IFileManager& Files = IFileManager::Get();
+	FString Best;
+	double BestTime = 0.0;
+	for (const FString& Dir : Config.CrashDirs)
+	{
+		TArray<FString> Folders;
+		Files.FindFiles(Folders, *FPaths::Combine(Dir, TEXT("*")), false, true);
+		for (const FString& Folder : Folders)
+		{
+			const FString Path = FPaths::Combine(Dir, Folder, TEXT("CrashContext.runtime-xml"));
+			const FDateTime Stamp = Files.GetTimeStamp(*Path);
+			if (Stamp == FDateTime::MinValue())
+			{
+				continue;
+			}
+			const double Time = static_cast<double>((Stamp - FDateTime(1970, 1, 1)).GetTicks()) / ETimespan::TicksPerSecond;
+			// File times can have whole seconds.
+			if (Time + 1.0 >= StartedAt && Time > BestTime)
+			{
+				Best = Path;
+				BestTime = Time;
+			}
+		}
+	}
+	if (Best.IsEmpty())
+	{
+		return nullptr;
+	}
+	FString SeenPath;
+	double SeenTime = 0.0;
+	State->TryGetStringField(TEXT("crash_file"), SeenPath);
+	State->TryGetNumberField(TEXT("crash_file_time"), SeenTime);
+	if (SeenPath == Best && SeenTime == BestTime)
+	{
+		return nullptr; // Already sent.
+	}
+	State->SetStringField(TEXT("crash_file"), Best);
+	State->SetNumberField(TEXT("crash_file_time"), BestTime);
+	// At most the first 256 KB: the call stack is near the top of the file.
+	TUniquePtr<FArchive> Reader(Files.CreateFileReader(*Best));
+	if (!Reader)
+	{
+		return nullptr;
+	}
+	TArray<uint8> Bytes;
+	Bytes.SetNumUninitialized(static_cast<int32>(FMath::Min<int64>(Reader->TotalSize(), MaxCrashFileBytes)));
+	Reader->Serialize(Bytes.GetData(), Bytes.Num());
+	Reader->Close();
+	FString Xml;
+	FFileHelper::BufferToString(Xml, Bytes.GetData(), Bytes.Num());
+	return ParseCrashContext(Xml, Config.CrashGameName, { FPlatformProcess::UserHomeDir(), FPlatformProcess::UserDir() });
 }
 
 // Properties -------------------------------------------------------------------

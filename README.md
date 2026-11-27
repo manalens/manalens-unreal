@@ -76,6 +76,16 @@ The plugin keeps events on disk and sends them in batches. Before a send, it ask
 
 The engine reports `None` from its own network monitor: Network List Manager on Windows, the network interfaces on Linux, `NWPathMonitor` on macOS and iOS, and `ConnectivityManager` on Android (UE 5.8). An engine or platform without a monitor reports `Unknown`, and the plugin sends as before.
 
+## Crash stacks
+
+After a crash, the next launch sends `app_crash`. On Windows, macOS, and Linux it also says where the game crashed. The plugin installs no crash handler: when the game crashes, the engine itself writes a crash folder with `CrashContext.runtime-xml`. At the next launch, the plugin reads the call stack and the error message from that file and adds `stack`, `error_type` (for example `EXCEPTION_ACCESS_VIOLATION` or `SIGSEGV`), `message`, `fingerprint`, `crash_source` (`unreal_crash_folder`), and `symbolicated` to `app_crash`.
+
+- Windows and Linux: the engine writes the folder to `Saved/Crashes`.
+- macOS: the engine writes the folder only when the build includes the crash reporter (Project Settings > Packaging > **Include Crash Reporter**).
+- A shipping build without debug symbols (`.pdb` on Windows) shows `UnknownFunction` frames. The plugin then sends `symbolicated` = `false`.
+- The plugin reads at most 256 KB, never sends the minidump or the log, never sends the same folder twice, and reads nothing before consent. Home folders, URLs, and emails are removed from the frames.
+- Turn it off with **Capture Crash Stacks** (Project Settings > Plugins > Manalens > Errors).
+
 ## BeforeSend
 
 `SetBeforeSend()` (C++) gets a copy of each event (track, identify, traits, error, automatic events) before it is queued. Return it (changed or not), or `nullptr` to drop it. The SDK takes `event`, `properties`, `traits`, and `user_id` from the result. If the result changes or removes `type`, `message_id`, `anonymous_id`, `session_id`, or `context.app`, the SDK sends the original event.

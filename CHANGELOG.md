@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0 (2026-11-27)
+
+- Crash stacks (P-2831): on Windows, macOS, and Linux, `app_crash` now says where the game crashed. At the next launch, the plugin reads the `CrashContext.runtime-xml` that the engine wrote for the crashed run (`Saved/Crashes`, and the engine user folder on macOS) and adds `stack`, `error_type`, `message`, `fingerprint`, `crash_source` (`unreal_crash_folder`), and `symbolicated`. No crash handler; at most 256 KB read; no minidump or log sent; each folder once; nothing before consent; ensures and stalls are skipped; folders of other games are skipped. New setting **Capture Crash Stacks** (default on) and `FManalensConfig::bCaptureCrashStacks`, `CrashDirs`, `CrashGameName`. macOS writes the crash folder only when the build includes the crash reporter.
+
 ## 0.4.0 (2026-11-27)
 
 - A `413` (batch too large) no longer drops the batch (P-2853). For a batch of more than 1 event, the plugin keeps the events and sends again at once with half the batch. It does not back off and does not count a failure. A `413` for 1 event drops that event and raises **On Send Failed** (`413`, `1`), as the other refused `4xx`. After a `2xx`, batches use the normal size (**Flush At**, at most 50) again. New value `EManalensSendOutcome::Split`, which `ClassifyStatus(413)` now returns.

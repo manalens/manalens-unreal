@@ -1695,3 +1695,164 @@ bool FManalensLinkTest::RunTest(const FString& Parameters)
 	}
 	return true;
 }
+
+// ---------------------------------------------------------------------------
+// Crash stacks (P-2831): the engine's CrashContext.runtime-xml added to app_crash.
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+namespace ManalensCrashTests
+{
+	/** From a macOS shipping build with the crash reporter (UE 5.8, a null write in CrashSpikeDeepFunction), shortened. */
+	const TCHAR* MacContext = TEXT(
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<FGenericCrashContext>\n<RuntimeProperties>\n"
+		"<CrashVersion>3</CrashVersion>\n<CrashGUID>UECC-Mac-0F9337F42941216AFA6ADD9A59CE0BA8_0000</CrashGUID>\n"
+		"<IsEnsure>false</IsEnsure>\n<IsAssert>false</IsAssert>\n<CrashType>Crash</CrashType>\n<ErrorMessage>Caught signal</ErrorMessage>\n"
+		"<CallStack>0x047baa34 CrashSpike-Mac-Shipping!CrashSpikeDeepFunction(int*) [UnknownFile]) \n"
+		"0x047ba9cc CrashSpike-Mac-Shipping!TBaseFunctorDelegateInstance&lt;bool (float), FDefaultDelegateUserPolicy, FCrashSpikeModule::StartupModule()::&apos;lambda&apos;(float)&gt;::Execute(float) const [UnknownFile]) \n"
+		"0x00736ac4 CrashSpike-Mac-Shipping!FTSTicker::Tick(float) [UnknownFile]) \n"
+		"0x047ac8b0 CrashSpike-Mac-Shipping!FEngineLoop::Tick() [UnknownFile]) \n"
+		"0x047adc0c CrashSpike-Mac-Shipping!GuardedMain(char16_t const*) [UnknownFile]) \n"
+		"</CallStack>\n<PCallStack></PCallStack>\n<GameName>UE-CrashSpike</GameName>\n<BuildConfiguration>Shipping</BuildConfiguration>\n"
+		"</RuntimeProperties>\n</FGenericCrashContext>\n");
+
+	/** A Windows shipping build without symbols (the CrashContext format, written by the game before the crash reporter starts). */
+	const TCHAR* WindowsContext = TEXT(
+		"<FGenericCrashContext><RuntimeProperties><CrashType>Crash</CrashType>"
+		"<ErrorMessage>Unhandled Exception: EXCEPTION_ACCESS_VIOLATION writing address 0x0000000000000000\n\nC:\\Users\\alex\\Games\\MyGame</ErrorMessage>"
+		"<CallStack>0x00007ff6a1b2c3d4 MyGame-Win64-Shipping.exe!UnknownFunction []\n0x00007ff6a1b2c3e5 MyGame-Win64-Shipping.exe!UnknownFunction []\n0x00007ffb30001111 KERNEL32.DLL!UnknownFunction []\n</CallStack>"
+		"<GameName>UE-MyGame</GameName></RuntimeProperties></FGenericCrashContext>");
+
+	/** Writes a crash folder with a CrashContext.runtime-xml under Dir/Crashes. */
+	FString WriteCrashFolder(const FString& Dir, const FString& Name, const FString& Xml)
+	{
+		const FString Path = FPaths::Combine(Dir, TEXT("Crashes"), Name, TEXT("CrashContext.runtime-xml"));
+		FFileHelper::SaveStringToFile(Xml, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		return Path;
+	}
+
+	double RealNow()
+	{
+		return static_cast<double>((FDateTime::UtcNow() - FDateTime(1970, 1, 1)).GetTicks()) / ETimespan::TicksPerSecond;
+	}
+
+	/** The properties of the newest queued app_crash (the queue keeps the earlier ones). */
+	TSharedPtr<FJsonObject> CrashProps(const FManalensClient& Client)
+	{
+		TSharedPtr<FJsonObject> Last;
+		for (const TSharedPtr<FJsonObject>& Event : ManalensTests::Queued(Client))
+		{
+			if (ManalensTests::NameOf(Event) == TEXT("app_crash"))
+			{
+				Last = Event->GetObjectField(TEXT("properties"));
+			}
+		}
+		return Last;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensCrashParseTest, "Manalens.Crash.ParseCrashContext", ManalensTests::Flags)
+bool FManalensCrashParseTest::RunTest(const FString& Parameters)
+{
+	using namespace ManalensCrashTests;
+	const TSharedPtr<FJsonObject> Mac = FManalensClient::ParseCrashContext(MacContext, TEXT("CrashSpike"), { TEXT("/Users/alex") });
+	if (TestTrue(TEXT("macOS context parsed"), Mac.IsValid()))
+	{
+		TArray<FString> Frames;
+		Mac->GetStringField(TEXT("stack")).ParseIntoArrayLines(Frames);
+		TestEqual(TEXT("top frame"), Frames[0], FString(TEXT("CrashSpike-Mac-Shipping!CrashSpikeDeepFunction(int*)")));
+		TestTrue(TEXT("entities decoded"), Frames[1].Contains(TEXT("TBaseFunctorDelegateInstance<bool (float)")) && Frames[1].Contains(TEXT("'lambda'")));
+		TestEqual(TEXT("five frames"), Frames.Num(), 5);
+		TestEqual(TEXT("macOS gives no signal number"), Mac->GetStringField(TEXT("error_type")), FString(TEXT("crash")));
+		TestEqual(TEXT("message"), Mac->GetStringField(TEXT("message")), FString(TEXT("Caught signal")));
+		TestEqual(TEXT("source"), Mac->GetStringField(TEXT("crash_source")), FString(TEXT("unreal_crash_folder")));
+		TestTrue(TEXT("names count as symbols"), Mac->GetBoolField(TEXT("symbolicated")));
+		TestEqual(TEXT("fingerprint"), Mac->GetStringField(TEXT("fingerprint")).Len(), 16);
+		const FString Moved = FString(MacContext).Replace(TEXT("0x047baa34"), TEXT("0x0aaaaaaa"));
+		TestEqual(TEXT("addresses do not change the fingerprint"), FManalensClient::ParseCrashContext(Moved, TEXT("CrashSpike"), {})->GetStringField(TEXT("fingerprint")), Mac->GetStringField(TEXT("fingerprint")));
+	}
+	const TSharedPtr<FJsonObject> Win = FManalensClient::ParseCrashContext(WindowsContext, TEXT("MyGame"), { TEXT("C:\\Users\\alex") });
+	if (TestTrue(TEXT("Windows context parsed"), Win.IsValid()))
+	{
+		TestEqual(TEXT("exception"), Win->GetStringField(TEXT("error_type")), FString(TEXT("EXCEPTION_ACCESS_VIOLATION")));
+		TestEqual(TEXT("first line only"), Win->GetStringField(TEXT("message")), FString(TEXT("Unhandled Exception: EXCEPTION_ACCESS_VIOLATION writing address 0x0000000000000000")));
+		TestEqual(TEXT("frames"), Win->GetStringField(TEXT("stack")), FString(TEXT("MyGame-Win64-Shipping.exe!UnknownFunction\nMyGame-Win64-Shipping.exe!UnknownFunction\nKERNEL32.DLL!UnknownFunction")));
+		TestFalse(TEXT("no symbols"), Win->GetBoolField(TEXT("symbolicated")));
+	}
+	TestFalse(TEXT("another game is skipped"), FManalensClient::ParseCrashContext(MacContext, TEXT("OtherGame"), {}).IsValid());
+	TestFalse(TEXT("an ensure is skipped"), FManalensClient::ParseCrashContext(FString(MacContext).Replace(TEXT("<CrashType>Crash</CrashType>"), TEXT("<CrashType>Ensure</CrashType>")), TEXT("CrashSpike"), {}).IsValid());
+	const TSharedPtr<FJsonObject> Linux = FManalensClient::ParseCrashContext(TEXT("<CrashType>Crash</CrashType><ErrorMessage>Caught signal 11 Segmentation fault</ErrorMessage><CallStack>0x1 libUnrealGame.so!FFoo::Bar() [/home/alex/src/Foo.cpp:12]\n</CallStack>"), FString(), { TEXT("/home/alex") });
+	if (TestTrue(TEXT("Linux context parsed"), Linux.IsValid()))
+	{
+		TestEqual(TEXT("signal 11"), Linux->GetStringField(TEXT("error_type")), FString(TEXT("SIGSEGV")));
+		TestEqual(TEXT("home folder removed, file kept"), Linux->GetStringField(TEXT("stack")), FString(TEXT("libUnrealGame.so!FFoo::Bar() [~/src/Foo.cpp:12]")));
+	}
+	FString Long;
+	for (int32 Index = 0; Index < 300; ++Index)
+	{
+		Long += FString::Printf(TEXT("0x%08x Game!SomeVeryLongFunctionNameThatIsNotAToken_%d() [UnknownFile]) \n"), Index, Index);
+	}
+	const TSharedPtr<FJsonObject> Big = FManalensClient::ParseCrashContext(FString(TEXT("<CrashType>Crash</CrashType><ErrorMessage>Caught signal</ErrorMessage><CallStack>")) + Long + TEXT("</CallStack>"), FString(), {});
+	TestTrue(TEXT("stack at most 4096 characters"), Big->GetStringField(TEXT("stack")).Len() <= FManalensClient::MaxCrashStack);
+	TestFalse(TEXT("long names are not masked"), Big->GetStringField(TEXT("stack")).Contains(TEXT("[redacted]")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensCrashReadTest, "Manalens.Crash.NextLaunchReadsTheCrashFolder", ManalensTests::Flags)
+bool FManalensCrashReadTest::RunTest(const FString& Parameters)
+{
+	using namespace ManalensCrashTests;
+	ManalensTests::FHarness H;
+	H.bHold = true;
+	// File times are real: run the fake clock near the real time.
+	const double T0 = RealNow() - 100.0;
+	H.Time = T0;
+	FManalensConfig Config = H.Config();
+	Config.CrashDirs = { FPaths::Combine(H.Dir, TEXT("Crashes")) };
+	Config.CrashGameName = TEXT("CrashSpike");
+	{
+		TSharedRef<FManalensClient> Crashed = H.Start(Config); // No FinishShutdown: the process died.
+	}
+	WriteCrashFolder(H.Dir, TEXT("CrashReport-UE-CrashSpike-pid-1-A"), MacContext);
+	H.Time = T0 + 50.0;
+	TSharedPtr<FJsonObject> Props;
+	{
+		TSharedRef<FManalensClient> Next = H.Start(Config); // It crashes too, with no new crash folder.
+		Props = CrashProps(*Next);
+	}
+	if (TestTrue(TEXT("app_crash"), Props.IsValid()))
+	{
+		TestTrue(TEXT("stack added"), Props->GetStringField(TEXT("stack")).StartsWith(TEXT("CrashSpike-Mac-Shipping!CrashSpikeDeepFunction(int*)")));
+		TestEqual(TEXT("previous_build kept"), Props->GetStringField(TEXT("previous_build")), FString(TEXT("571")));
+	}
+	// The crash folder is newer than the second session start too: only the saved path and time stop a second send.
+	H.Time = T0 + 60.0;
+	{
+		TSharedRef<FManalensClient> Third = H.Start(Config);
+		const TSharedPtr<FJsonObject> Again = CrashProps(*Third);
+		TestTrue(TEXT("second app_crash"), Again.IsValid() && Again->GetStringField(TEXT("previous_session_id")) != Props->GetStringField(TEXT("previous_session_id")));
+		TestFalse(TEXT("the same crash folder is not sent twice"), Again.IsValid() && Again->HasField(TEXT("stack")));
+	}
+	// Off: no crash data.
+	IFileManager::Get().DeleteDirectory(*FPaths::Combine(H.Dir, TEXT("Crashes")), false, true);
+	WriteCrashFolder(H.Dir, TEXT("CrashReport-UE-CrashSpike-pid-2-B"), MacContext);
+	Config.bCaptureCrashStacks = false;
+	H.Time = T0 + 70.0;
+	{
+		TSharedRef<FManalensClient> Off = H.Start(Config);
+		const TSharedPtr<FJsonObject> Plain = CrashProps(*Off);
+		TestFalse(TEXT("Capture Crash Stacks off"), Plain.IsValid() && Plain->HasField(TEXT("stack")));
+	}
+	// Mobile: no crash data.
+	Config.bCaptureCrashStacks = true;
+	Config.Platform = TEXT("android");
+	H.Time = T0 + 80.0;
+	{
+		TSharedRef<FManalensClient> Mobile = H.Start(Config);
+		const TSharedPtr<FJsonObject> Plain = CrashProps(*Mobile);
+		TestFalse(TEXT("not on mobile"), Plain.IsValid() && Plain->HasField(TEXT("stack")));
+	}
+	return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS
