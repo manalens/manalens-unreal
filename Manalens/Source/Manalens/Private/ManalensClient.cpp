@@ -1555,7 +1555,7 @@ void FManalensClient::TrySend()
 		bFlushRequested = false;
 		return;
 	}
-	const int32 Count = FMath::Min(Config.FlushAt, Queue.Num());
+	const int32 Count = FMath::Min3(Config.FlushAt, BatchLimit, Queue.Num());
 	TSet<FString> Ids;
 	FString Body = TEXT("{\"events\":[");
 	for (int32 Index = 0; Index < Count; ++Index)
@@ -1594,8 +1594,13 @@ EManalensSendOutcome FManalensClient::ClassifyStatus(int32 Status)
 	{
 		return EManalensSendOutcome::Sent;
 	}
-	// A 4xx other than 408 and 429 will fail again: drop the batch (as the Godot,
-	// Unity, and web SDKs do). Network errors (0) and 5xx stay and back off.
+	// 413: the batch is too large. OnResponse() halves it (or drops a single event).
+	if (Status == 413)
+	{
+		return EManalensSendOutcome::Split;
+	}
+	// A 4xx other than 408, 413, and 429 will fail again: drop the batch (as the
+	// Godot, Unity, and web SDKs do). Network errors (0) and 5xx stay and back off.
 	if (Status >= 400 && Status < 500 && Status != 408 && Status != 429)
 	{
 		return EManalensSendOutcome::Drop;
@@ -1669,8 +1674,23 @@ int32 FManalensClient::ParseRejected(const FString& Body, FString& OutCodes)
 void FManalensClient::OnResponse(const FManalensHttpResult& Result, const TSet<FString>& Ids)
 {
 	int32 Count = Ids.Num();
-	const EManalensSendOutcome Outcome = ClassifyStatus(Result.Status);
-	if (Outcome != EManalensSendOutcome::Retry)
+	EManalensSendOutcome Outcome = ClassifyStatus(Result.Status);
+	if (Outcome == EManalensSendOutcome::Split && Count <= 1)
+	{
+		Outcome = EManalensSendOutcome::Drop; // A single event that is too large: drop it.
+	}
+	if (Outcome == EManalensSendOutcome::Sent)
+	{
+		BatchLimit = MAX_int32;
+	}
+	if (Outcome == EManalensSendOutcome::Split)
+	{
+		// Keep the events (same order, same message_id values) and send again at
+		// once with half the batch. Not a failure: no backoff, Failures does not change.
+		BatchLimit = FMath::Max(1, Count / 2);
+		UE_LOG(LogManalens, Warning, TEXT("Manalens: 413: batch of %d events too large, sending %d"), Count, BatchLimit);
+	}
+	else if (Outcome != EManalensSendOutcome::Retry)
 	{
 		Queue.RemoveAll([&Ids](const FQueueEntry& Entry) { return Ids.Contains(Entry.MessageId); });
 		bQueueDirty = true;

@@ -748,7 +748,7 @@ bool FManalensRetryTest::RunTest(const FString& Parameters)
 	const TPair<int32, EManalensSendOutcome> Cases[] = {
 		{ 0, EManalensSendOutcome::Retry }, { 200, EManalensSendOutcome::Sent }, { 202, EManalensSendOutcome::Sent },
 		{ 400, EManalensSendOutcome::Drop }, { 401, EManalensSendOutcome::Drop }, { 403, EManalensSendOutcome::Drop }, { 404, EManalensSendOutcome::Drop },
-		{ 408, EManalensSendOutcome::Retry }, { 413, EManalensSendOutcome::Drop }, { 429, EManalensSendOutcome::Retry },
+		{ 408, EManalensSendOutcome::Retry }, { 413, EManalensSendOutcome::Split }, { 429, EManalensSendOutcome::Retry },
 		{ 500, EManalensSendOutcome::Retry }, { 502, EManalensSendOutcome::Retry }, { 503, EManalensSendOutcome::Retry },
 	};
 	for (const TPair<int32, EManalensSendOutcome>& Case : Cases)
@@ -806,12 +806,81 @@ bool FManalensRetryTest::RunTest(const FString& Parameters)
 	Client->Track(TEXT("after"));
 	H.Status = 413;
 	Client->Flush();
-	TestEqual(TEXT("413: dropped"), Client->GetQueueSize(), 0);
+	TestEqual(TEXT("413 for 1 event: dropped"), Client->GetQueueSize(), 0);
+	TestTrue(TEXT("413 for 1 event: reported"), H.SendFailed.Num() == 2 && H.SendFailed[1].Key == 413 && H.SendFailed[1].Value == 1);
 
 	Client->Track(TEXT("ok"));
 	H.Status = 202;
 	Client->Flush();
 	TestEqual(TEXT("202: sent"), Client->GetQueueSize(), 0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensSplitTest, "Manalens.Retry.SplitOn413", Flags)
+bool FManalensSplitTest::RunTest(const FString& Parameters)
+{
+	// P-2853: a 413 keeps the events and sends again at once with half the batch.
+	AddExpectedMessagePlain(TEXT("413: batch of 20 events too large, sending 10"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	AddExpectedMessagePlain(TEXT("413: batch of 2 events too large, sending 1"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	AddExpectedMessagePlain(TEXT("the collector refused 1 events (HTTP 413)"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	{
+		FHarness H;
+		FManalensConfig Config = H.Config();
+		Config.FlushAt = 20;
+		TSharedRef<FManalensClient> Client = H.Start(Config);
+		Client->Update();
+		TestEqual(TEXT("start events sent"), Client->GetQueueSize(), 0);
+		for (int32 Index = 0; Index < 20; ++Index)
+		{
+			Client->Track(FString::Printf(TEXT("e%d"), Index));
+		}
+		const int32 First = H.Requests.Num();
+		H.Status = 413;
+		Client->Update();
+		TestEqual(TEXT("first request: 20 events"), H.Requests.Num() > First ? H.Requests[First].Events().Num() : -1, 20);
+		TestEqual(TEXT("413: all events kept"), Client->GetQueueSize(), 20);
+		TestEqual(TEXT("413: no backoff"), Client->GetBackoffUntil(), 0.0);
+		H.Status = 202;
+		Client->Update(); // No clock change: no wait after the 413.
+		Client->Update();
+		TestEqual(TEXT("two more requests"), H.Requests.Num(), First + 3);
+		if (H.Requests.Num() == First + 3)
+		{
+			TestEqual(TEXT("second request: 10 events"), H.Requests[First + 1].Events().Num(), 10);
+			TestEqual(TEXT("third request: 10 events"), H.Requests[First + 2].Events().Num(), 10);
+			TArray<FString> Resent = H.Requests[First + 1].MessageIds();
+			Resent.Append(H.Requests[First + 2].MessageIds());
+			TestTrue(TEXT("same events, same order, same message IDs"), Resent == H.Requests[First].MessageIds());
+		}
+		TestEqual(TEXT("no event lost"), Client->GetQueueSize(), 0);
+		TestEqual(TEXT("no send failed"), H.SendFailed.Num(), 0);
+		// After a success the next batch uses the full size again.
+		for (int32 Index = 0; Index < 20; ++Index)
+		{
+			Client->Track(FString::Printf(TEXT("f%d"), Index));
+		}
+		Client->Update();
+		TestEqual(TEXT("full size again"), H.Requests.Last().Events().Num(), 20);
+	}
+	{
+		// A batch of 1 after halving: the event is dropped with SendFailed(413, 1).
+		FHarness H;
+		H.Status = 413;
+		TSharedRef<FManalensClient> Client = H.Start();
+		Client->Update();
+		TestEqual(TEXT("2 events: kept"), Client->GetQueueSize(), 2);
+		TestEqual(TEXT("2 events: no send failed"), H.SendFailed.Num(), 0);
+		Client->Update();
+		TestEqual(TEXT("1 event: dropped"), Client->GetQueueSize(), 1);
+		TestTrue(TEXT("1 event: SendFailed(413, 1)"), H.SendFailed.Num() == 1 && H.SendFailed[0].Key == 413 && H.SendFailed[0].Value == 1);
+		TestTrue(TEXT("the first event was dropped"), H.Requests.Num() == 2 && H.Requests[1].MessageIds().Num() == 1 && H.Requests[1].MessageIds()[0] == H.Requests[0].MessageIds()[0]);
+		H.Status = 202;
+		Client->Update();
+		TestEqual(TEXT("the other event is sent"), Client->GetQueueSize(), 0);
+		TestTrue(TEXT("sent with no backoff"), H.Requests.Num() == 3 && H.Requests[2].MessageIds().Num() == 1 && H.Requests[2].MessageIds()[0] == H.Requests[0].MessageIds()[1]);
+	}
 	return true;
 }
 

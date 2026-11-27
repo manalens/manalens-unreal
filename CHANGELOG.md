@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A `413` (batch too large) no longer drops the batch (P-2853). For a batch of more than 1 event, the plugin keeps the events and sends again at once with half the batch. It does not back off and does not count a failure. A `413` for 1 event drops that event and raises **On Send Failed** (`413`, `1`), as the other refused `4xx`. After a `2xx`, batches use the normal size (**Flush At**, at most 50) again. New value `EManalensSendOutcome::Split`, which `ClassifyStatus(413)` now returns.
+
 ## 0.3.0 (2026-11-27)
 
 - Breaking: standard names for error and crash events (the same in the Unity, Godot, and Unreal SDKs).

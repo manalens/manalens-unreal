@@ -70,6 +70,12 @@ enum class EManalensSendOutcome : uint8
 	Retry,
 	/** Another 4xx: the same batch would be refused again, so drop it. */
 	Drop,
+	/**
+	 * 413: the batch is too large. With more than 1 event, keep the events and
+	 * send again at once with half the batch (no backoff, not a failure). With
+	 * 1 event, drop it as Drop does.
+	 */
+	Split,
 };
 
 /**
@@ -324,6 +330,8 @@ private:
 	double NextTickAt = 0.0;
 	double BackoffUntil = 0.0;
 	int32 Failures = 0;
+	/** The batch limit after a 413: half the last batch. Back to no limit after any 2xx. */
+	int32 BatchLimit = MAX_int32;
 	TOptional<TPair<FString, TSharedPtr<FJsonObject>>> DeferredIdentify;
 	/** Traits() before consent, merged. */
 	TSharedPtr<FJsonObject> HeldTraits;

@@ -110,7 +110,7 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Manalens")
 	FManalensSendFailed OnSendFailed;
 
-	/** After each send. bOk is false for a network error or a 5xx, 408, or 429 response; those events stay queued. */
+	/** After each send. bOk is false for a network error or a 5xx, 408, or 429 response, and for a 413 with more than 1 event (sent again in smaller batches); those events stay queued. */
 	UPROPERTY(BlueprintAssignable, Category = "Manalens")
 	FManalensFlushed OnFlushed;
 
