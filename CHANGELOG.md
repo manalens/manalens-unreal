@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-11-27)
 
 - A `413` (batch too large) no longer drops the batch (P-2853). For a batch of more than 1 event, the plugin keeps the events and sends again at once with half the batch. It does not back off and does not count a failure. A `413` for 1 event drops that event and raises **On Send Failed** (`413`, `1`), as the other refused `4xx`. After a `2xx`, batches use the normal size (**Flush At**, at most 50) again. New value `EManalensSendOutcome::Split`, which `ClassifyStatus(413)` now returns.
 - No send while the device has no network (P-2853). When `FPlatformMisc::GetNetworkConnectionType()` is `None` or `AirplaneMode`, the plugin starts no request, keeps the events, and does not count a failure or back off. When the device has a network again, the next tick sends at once (before, a long time offline made the plugin wait up to 300 s). A real network error during a send still backs off. `Unknown` (an engine or platform without a network monitor) counts as a network. New `FManalensClient::IsOffline` and `FManalensClient::EngineReportsNoNetwork()`.

@@ -88,7 +88,7 @@ class MANALENS_API FManalensClient
 {
 public:
 	static constexpr const TCHAR* LibraryName = TEXT("Manalens Unreal SDK");
-	static constexpr const TCHAR* LibraryVersion = TEXT("0.3.0");
+	static constexpr const TCHAR* LibraryVersion = TEXT("0.4.0");
 	/** The source of an error: a Track Error call, or an automatic capture. */
 	static constexpr const TCHAR* SourceManual = TEXT("manual");
 	static constexpr const TCHAR* SourceAuto = TEXT("auto");
