@@ -20,6 +20,9 @@
 #include "Misc/OutputDeviceRedirector.h"
 #include "Misc/ScopeLock.h"
 #include "Modules/ModuleManager.h"
+#include "OnlineSubsystem.h"
+#include "OnlineSubsystemNames.h"
+#include "Interfaces/OnlineIdentityInterface.h"
 
 /** Collects Error (and optionally Warning) lines of the engine log from any thread. The subsystem sends them on the game thread. */
 class FManalensLogCapture : public FOutputDevice
@@ -118,6 +121,7 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Config.Storefront = UManalensSettings::StorefrontValue(Settings->Storefront);
 	Config.Platform = Settings->Platform.TrimStartAndEnd();
 	Config.bConsentRequired = Settings->bConsentRequired;
+	Config.bSteamLink = Settings->bSteamLink;
 	Config.bDebug = Settings->bDebug;
 	// A dedicated server keeps Track() and Identify(), without the client events.
 	Config.bServerBuild = IsRunningDedicatedServer();
@@ -161,6 +165,27 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 			WeakThis->OnSteamLinked.Broadcast(bLinked, Status, Code);
 		}
 	};
+	if (Config.bSteamLink)
+	{
+		// Steam Link: a Web API ticket from the Steam Online Subsystem, only when it is
+		// loaded. The plugin has no Steam dependency: without OnlineSubsystemSteam the
+		// ticket is empty and nothing is linked.
+		Client->RequestSteamTicket = [](TFunction<void(const FString&)> Done)
+		{
+			IOnlineSubsystem* Steam = IOnlineSubsystem::IsLoaded(STEAM_SUBSYSTEM) ? IOnlineSubsystem::Get(STEAM_SUBSYSTEM) : nullptr;
+			const IOnlineIdentityPtr Identity = Steam ? Steam->GetIdentityInterface() : nullptr;
+			if (!Identity.IsValid())
+			{
+				Done(FString());
+				return;
+			}
+			Identity->GetLinkedAccountAuthToken(0, FString(TEXT("WebAPI:")) + FManalensClient::SteamTicketIdentity,
+				IOnlineIdentity::FOnGetLinkedAccountAuthTokenCompleteDelegate::CreateLambda([Done](int32, bool bWasSuccessful, const FExternalAuthToken& Token)
+				{
+					Done(bWasSuccessful ? Token.TokenString : FString());
+				}));
+		};
+	}
 	if (!Client->Init(Config))
 	{
 		Client.Reset();

@@ -64,6 +64,18 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Build")
 	FString Platform;
 
+	/**
+	 * Steam Link: verify the player's Steam account once per launch, after
+	 * consent, so Manalens shows Steam ownership and joins the player's installs.
+	 * Needs the Steam Online Subsystem (the OnlineSubsystemSteam plugin enabled
+	 * and the Steam client running); without it nothing happens. The plugin asks
+	 * Steam for a Web API ticket with the identity "manalens" 20 seconds after
+	 * the first accepted event batch of the launch. Link Steam Ticket from your
+	 * own code does not wait. Off by default.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Steam", meta = (DisplayName = "Steam Link"))
+	bool bSteamLink = false;
+
 	/** No events and no stored ID until Set Consent (true). */
 	UPROPERTY(config, EditAnywhere, Category = "Privacy")
 	bool bConsentRequired = false;

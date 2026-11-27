@@ -420,6 +420,7 @@ void FManalensClient::LinkSteamTicket(const TArray<uint8>& Ticket)
 	{
 		return;
 	}
+	bSteamLinkDone = true; // A call from the game replaces bSteamLink in this launch.
 	PendingLinkTicket = BytesToHex(Ticket.GetData(), Ticket.Num()).ToLower();
 }
 
@@ -1068,7 +1069,51 @@ void FManalensClient::Update()
 	{
 		TrySend();
 	}
+	UpdateSteamLink();
 	UpdateLink();
+}
+
+void FManalensClient::UpdateSteamLink()
+{
+	// Once per launch, after consent, and SteamLinkDelaySeconds after the first accepted
+	// batch: Manalens trusts the link of an install that has its own events before it.
+	if (!Config.bSteamLink || bSteamLinkDone || bSteamTicketPending || bServerQuiet || !bIdentityActive || !RequestSteamTicket || IsLinking() || !IsSteamLinkReady())
+	{
+		return;
+	}
+	const double At = Now();
+	if (At < NextSteamLinkAt)
+	{
+		return;
+	}
+	if (SteamLinkTriesLeft <= 0)
+	{
+		bSteamLinkDone = true;
+		return;
+	}
+	--SteamLinkTriesLeft;
+	NextSteamLinkAt = At + SteamLinkRetrySeconds;
+	bSteamTicketPending = true;
+	TWeakPtr<bool, ESPMode::ThreadSafe> WeakAlive = Alive;
+	RequestSteamTicket([this, WeakAlive](const FString& TicketHex)
+	{
+		const TSharedPtr<bool, ESPMode::ThreadSafe> Pinned = WeakAlive.Pin();
+		if (!Pinned.IsValid() || !*Pinned || !bSteamTicketPending)
+		{
+			return;
+		}
+		bSteamTicketPending = false;
+		if (TicketHex.IsEmpty())
+		{
+			if (Config.bDebug)
+			{
+				UE_LOG(LogManalens, Log, TEXT("Manalens: Steam gave no Web API ticket; trying again later"));
+			}
+			return;
+		}
+		bSteamLinkDone = true;
+		LinkSteamTicketHex(TicketHex);
+	});
 }
 
 void FManalensClient::SetFocused(bool bInFocused)
@@ -1739,6 +1784,10 @@ void FManalensClient::OnResponse(const FManalensHttpResult& Result, const TSet<F
 	if (Outcome == EManalensSendOutcome::Sent)
 	{
 		BatchLimit = MAX_int32;
+		if (FirstBatchAcceptedAt < 0.0)
+		{
+			FirstBatchAcceptedAt = Now();
+		}
 	}
 	if (Outcome == EManalensSendOutcome::Split)
 	{

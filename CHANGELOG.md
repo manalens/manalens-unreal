@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.0 (2026-11-27)
+
+- New option **Steam Link** (Project Settings > Plugins > Manalens > Steam, `bSteamLink`, off by default), as in the Godot and Unity SDKs. Once per launch, after consent, the plugin asks the Steam Online Subsystem for a Web API ticket with the identity `manalens` and links the Steam account (`POST /v0/link`). It waits until the first event batch of the launch was accepted (a 2xx answer), plus 20 seconds, because Manalens merges the installs of one Steam account only when the install has its own events before a link. If Steam gives no ticket (not running yet), it asks again every 10 seconds, at most 6 times. Needs the OnlineSubsystemSteam plugin and the Steam client; without them nothing happens. The plugin has no Steam dependency: it depends on the generic OnlineSubsystem plugin (on by default in the engine). `Link Steam Ticket` from your code does not wait, as before, and stops the option for that launch.
 ## 0.5.2 (2026-11-27)
 
 - Fix: a crash stack longer than 1024 characters made the collector refuse the whole `app_crash` (`INVALID_EVENT`), so the crash was lost. The stack now keeps the top frames, at most 1024 characters, the collector limit for a property value. Found in a production test of the Godot SDK, which had the same limit.

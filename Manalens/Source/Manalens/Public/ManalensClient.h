@@ -31,6 +31,14 @@ struct MANALENS_API FManalensConfig
 	int32 FlushAt = 20;
 	int32 MaxQueue = 1000;
 	int32 MaxAutoErrorsPerSession = 50;
+	/**
+	 * Steam Link: verify the Steam account once per launch, after consent, with a
+	 * ticket from RequestSteamTicket (UManalensSubsystem: the Steam Online
+	 * Subsystem). The client asks for it SteamLinkDelaySeconds after the first
+	 * accepted event batch of the launch, so the install's events are stored
+	 * before the link (Manalens merges installs only then). Off by default.
+	 */
+	bool bSteamLink = false;
 	/** Folder for the state, the queue, and the opt-out marker. Empty: Saved/Manalens. */
 	FString StorageDir;
 	/** Empty: the platform of this build (PLATFORM_* macros). Else one of Platforms(). */
@@ -102,7 +110,7 @@ class MANALENS_API FManalensClient
 {
 public:
 	static constexpr const TCHAR* LibraryName = TEXT("Manalens Unreal SDK");
-	static constexpr const TCHAR* LibraryVersion = TEXT("0.5.2");
+	static constexpr const TCHAR* LibraryVersion = TEXT("0.6.0");
 	/** The source of an error: a Track Error call, or an automatic capture. */
 	static constexpr const TCHAR* SourceManual = TEXT("manual");
 	static constexpr const TCHAR* SourceAuto = TEXT("auto");
@@ -128,6 +136,11 @@ public:
 	static constexpr const TCHAR* SteamTicketIdentity = TEXT("manalens");
 	/** LinkSteamTicket() waits for a 429 Retry-After of at most this many seconds, once. */
 	static constexpr double LinkMaxRetryAfterSeconds = 60.0;
+	/** bSteamLink: the link starts this many seconds after the first accepted batch of the launch. */
+	static constexpr double SteamLinkDelaySeconds = 20.0;
+	/** bSteamLink: tries to get a ticket (Steam may start after the plugin), one every SteamLinkRetrySeconds. */
+	static constexpr int32 SteamLinkTries = 6;
+	static constexpr double SteamLinkRetrySeconds = 10.0;
 	/** Protected traits (P-2814): only a server with the secret key may set them. Traits() does not send them. */
 	static const TArray<FString>& ProtectedTraits();
 	/**
@@ -170,6 +183,13 @@ public:
 	 */
 	TFunction<void(bool /*bLinked*/, int32 /*Status*/, const FString& /*Code*/)> OnSteamLinked;
 	/**
+	 * bSteamLink: asks Steam for a Web API ticket with the identity "manalens" and
+	 * calls Done once with the ticket as hex, or with an empty string when Steam
+	 * gave none (not running, not logged on). Empty function: no Steam, nothing
+	 * happens. UManalensSubsystem sets it from the Steam Online Subsystem.
+	 */
+	TFunction<void(TFunction<void(const FString& /*TicketHex*/)> /*Done*/)> RequestSteamTicket;
+	/**
 	 * Gets a copy of each event before it is queued: track events (also error and the
 	 * automatic events such as session_start), identify, and traits. Fields: type, event,
 	 * properties, traits, user_id, message_id, anonymous_id, session_id, context, ...
@@ -209,6 +229,8 @@ public:
 	void LinkSteamTicketHex(const FString& TicketHex);
 	/** The URL of LinkSteamTicket(). */
 	const FString& GetLinkUrl() const { return LinkUrlValue; }
+	/** true when a batch of this launch was accepted (2xx) at least SteamLinkDelaySeconds ago: bSteamLink links only then. */
+	bool IsSteamLinkReady() const { return FirstBatchAcceptedAt >= 0.0 && Now() >= FirstBatchAcceptedAt + SteamLinkDelaySeconds; }
 	/** true while a link waits for Update() or consent, runs, or waits for its retry. */
 	bool IsLinking() const { return bLinkInFlight || !PendingLinkTicket.IsEmpty(); }
 	/** Record an error event. Extra holds more scalar properties. */
@@ -342,6 +364,7 @@ private:
 	void RaiseSendFailed(int32 Status, int32 Dropped);
 	void SendTraits(const TSharedRef<FJsonObject>& Values);
 	void UpdateLink();
+	void UpdateSteamLink();
 	void SendLink();
 	void OnLinkResponse(const FManalensHttpResult& Result);
 	void FinishLink(bool bLinked, int32 Status, const FString& Code);
@@ -397,6 +420,13 @@ private:
 	bool bLinkInFlight = false;
 	int32 LinkAttempt = 0;
 	double LinkRetryAt = -1.0;
+	/** Now() of the first 2xx batch of this launch; -1: none yet. */
+	double FirstBatchAcceptedAt = -1.0;
+	/** bSteamLink: the automatic link ran (or the game linked itself) in this launch. */
+	bool bSteamLinkDone = false;
+	bool bSteamTicketPending = false;
+	int32 SteamLinkTriesLeft = SteamLinkTries;
+	double NextSteamLinkAt = 0.0;
 	TArray<FString> RecentEvents;
 	bool bInBeforeSend = false;
 	TMap<FString, double> ErrorSeen;

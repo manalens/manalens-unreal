@@ -1863,3 +1863,116 @@ bool FManalensCrashReadTest::RunTest(const FString& Parameters)
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensSteamLinkOptionTest, "Manalens.Link.SteamLinkOption", Flags)
+bool FManalensSteamLinkOptionTest::RunTest(const FString& Parameters)
+{
+	// Off by default: no ticket is asked.
+	{
+		FHarness H;
+		int32 Asked = 0;
+		TSharedRef<FManalensClient> Client = H.Make();
+		Client->RequestSteamTicket = [&Asked](TFunction<void(const FString&)> Done) { ++Asked; Done(SteamTicketHex); };
+		Client->Init(H.Config());
+		Client->Update();
+		H.Time += 60;
+		Client->Update();
+		TestEqual(TEXT("off: no ticket"), Asked, 0);
+		TestEqual(TEXT("off: no link"), LinkRequests(H).Num(), 0);
+	}
+	// On: no ticket before the first accepted batch of the launch, none in the 20 s
+	// after it (the collector stores the events), then one link per launch.
+	{
+		FHarness H;
+		int32 Asked = 0;
+		FManalensConfig Config = H.Config();
+		Config.bSteamLink = true;
+		H.Status = 503;
+		TSharedRef<FManalensClient> Client = H.Make();
+		Client->RequestSteamTicket = [&Asked](TFunction<void(const FString&)> Done) { ++Asked; Done(SteamTicketHex); };
+		Client->Init(Config);
+		Client->Update();
+		H.Time += 60;
+		Client->Update();
+		TestEqual(TEXT("no ticket before an accepted batch"), Asked, 0);
+		TestFalse(TEXT("not ready after failed batches"), Client->IsSteamLinkReady());
+		H.Status = 202;
+		H.Time += 600;
+		Client->Update();
+		TestFalse(TEXT("not ready at the accepted batch"), Client->IsSteamLinkReady());
+		TestEqual(TEXT("no ticket at the accepted batch"), Asked, 0);
+		H.Time += FManalensClient::SteamLinkDelaySeconds - 1;
+		Client->Update();
+		TestEqual(TEXT("no ticket during the wait"), Asked, 0);
+		H.Time += 1;
+		Client->Update();
+		TestTrue(TEXT("ready 20 s after the accepted batch"), Client->IsSteamLinkReady());
+		TestEqual(TEXT("one ticket"), Asked, 1);
+		const TArray<FRequest> Links = LinkRequests(H);
+		if (TestEqual(TEXT("one link request"), Links.Num(), 1))
+		{
+			TestEqual(TEXT("body"), Links[0].Body, FString::Printf(TEXT("{\"provider\":\"steam\",\"ticket\":\"%s\",\"anonymous_id\":\"%s\"}"), SteamTicketHex, *Client->GetAnonymousId()));
+		}
+		H.Time += 600;
+		Client->Update();
+		TestEqual(TEXT("once per launch"), Asked, 1);
+		TestEqual(TEXT("one link per launch"), LinkRequests(H).Num(), 1);
+	}
+	// Steam gives no ticket (not running yet): asked again every 10 s, at most 6 times.
+	{
+		FHarness H;
+		int32 Asked = 0;
+		FManalensConfig Config = H.Config();
+		Config.bSteamLink = true;
+		TSharedRef<FManalensClient> Client = H.Make();
+		Client->RequestSteamTicket = [&Asked](TFunction<void(const FString&)> Done) { ++Asked; Done(FString()); };
+		Client->Init(Config);
+		Client->Update();
+		H.Time += FManalensClient::SteamLinkDelaySeconds;
+		for (int32 Tick = 0; Tick < 12; ++Tick)
+		{
+			Client->Update();
+			H.Time += FManalensClient::SteamLinkRetrySeconds;
+		}
+		TestEqual(TEXT("six tries"), Asked, FManalensClient::SteamLinkTries);
+		TestEqual(TEXT("no link without a ticket"), LinkRequests(H).Num(), 0);
+	}
+	// Consent required: no ticket before consent.
+	{
+		FHarness H;
+		int32 Asked = 0;
+		FManalensConfig Config = H.Config();
+		Config.bSteamLink = true;
+		Config.bConsentRequired = true;
+		TSharedRef<FManalensClient> Client = H.Make();
+		Client->RequestSteamTicket = [&Asked](TFunction<void(const FString&)> Done) { ++Asked; Done(SteamTicketHex); };
+		Client->Init(Config);
+		Client->Update();
+		H.Time += 60;
+		Client->Update();
+		TestEqual(TEXT("no ticket before consent"), Asked, 0);
+		Client->SetConsent(true);
+		Client->Update();
+		H.Time += FManalensClient::SteamLinkDelaySeconds;
+		Client->Update();
+		TestEqual(TEXT("one ticket after consent"), Asked, 1);
+	}
+	// The game links itself: the option asks no ticket in this launch.
+	{
+		FHarness H;
+		int32 Asked = 0;
+		FManalensConfig Config = H.Config();
+		Config.bSteamLink = true;
+		TSharedRef<FManalensClient> Client = H.Make();
+		Client->RequestSteamTicket = [&Asked](TFunction<void(const FString&)> Done) { ++Asked; Done(SteamTicketHex); };
+		Client->Init(Config);
+		Client->LinkSteamTicket(SteamTicket());
+		Client->Update();
+		TestEqual(TEXT("the game's link does not wait"), LinkRequests(H).Num(), 1);
+		H.Time += 60;
+		Client->Update();
+		TestEqual(TEXT("no automatic ticket after the game's link"), Asked, 0);
+		TestEqual(TEXT("one link"), LinkRequests(H).Num(), 1);
+	}
+	return true;
+}

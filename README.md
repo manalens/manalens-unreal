@@ -45,7 +45,9 @@ Manalens->Traits({ { TEXT("difficulty"), TEXT("hard") } }, { { TEXT("level"), 3 
 
 **Link Steam Ticket** links the Steam account that runs the game to this install. Manalens checks a Steam ticket with Steam and reads which of your apps the account owns. The player does not sign in. See [Steam ownership](https://docs.manalens.dev/features/steam-ownership) and the [Link API](https://docs.manalens.dev/api/link).
 
-The plugin has no Steam dependency. Your game gets a Steam Web API ticket with the identity `manalens` and passes its bytes. With the Steamworks SDK (the `Steamworks` module of the engine):
+**Steam Link** (the easy way): with the Steam Online Subsystem (the OnlineSubsystemSteam plugin enabled and `DefaultPlatformService=Steam`), turn on **Steam Link** in Project Settings > Plugins > Manalens > Steam. Once per launch, after consent, the plugin gets a Web API ticket with the identity `manalens` and links it. It waits until the first event batch of the launch was accepted, plus 20 seconds: Manalens merges the installs of one Steam account only when the install has its own events before a link. See [Link Steam in 2 minutes](https://docs.manalens.dev/features/link-steam).
+
+The plugin has no Steam dependency (it uses the generic OnlineSubsystem plugin, which the engine turns on by default). You can also get the ticket yourself and pass its bytes. Do it after your first events were sent. With the Steamworks SDK (the `Steamworks` module of the engine):
 
 ```cpp
 // After SteamAPI_Init(). Keep the callback object alive until it fires.

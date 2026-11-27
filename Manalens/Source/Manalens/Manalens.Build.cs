@@ -18,6 +18,9 @@ public class Manalens : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"HTTP",
+			// Steam Link: the generic online interfaces only (no Steam module). The
+			// Steam Online Subsystem is used at run time when the game enables it.
+			"OnlineSubsystem",
 		});
 	}
 }
