@@ -2099,10 +2099,27 @@ TSharedPtr<FJsonObject> FManalensClient::ParseCrashContext(const FString& Xml, c
 	const FString Type = ManalensCrash::ErrorType(Message, CrashType);
 	TSharedPtr<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetStringField(TEXT("error_type"), Type);
-	// The message: as a frame, plus the key=value masking. Not the long-token
-	// rule: it would mask EXCEPTION_ACCESS_VIOLATION.
-	FString CleanMessage = CleanStackFrame(Message.IsEmpty() ? FString(TEXT("The game crashed")) : Message, HomeDirs);
-	ManalensClean::MaskKeyValues(CleanMessage);
+	// The message gets the full log cleaning (an assertion text can hold a
+	// token). Only the Windows exception names (EXCEPTION_ACCESS_VIOLATION) are
+	// kept: they are set by the engine, and the token rule would mask them.
+	TArray<FString> Kept;
+	FString Protected = Message.IsEmpty() ? FString(TEXT("The game crashed")) : Message;
+	{
+		FRegexMatcher Names(FRegexPattern(TEXT("EXCEPTION_[A-Z_]+")), Protected);
+		while (Names.FindNext())
+		{
+			Kept.AddUnique(Names.GetCaptureGroup(0));
+		}
+	}
+	for (int32 Index = 0; Index < Kept.Num(); ++Index)
+	{
+		Protected.ReplaceInline(*Kept[Index], *FString::Printf(TEXT("@@EXC%d@@"), Index), ESearchCase::CaseSensitive);
+	}
+	FString CleanMessage = CleanLogMessage(Protected, HomeDirs);
+	for (int32 Index = 0; Index < Kept.Num(); ++Index)
+	{
+		CleanMessage.ReplaceInline(*FString::Printf(TEXT("@@EXC%d@@"), Index), *Kept[Index], ESearchCase::CaseSensitive);
+	}
 	Out->SetStringField(TEXT("message"), CleanMessage.Left(MaxString));
 	Out->SetStringField(TEXT("crash_source"), TEXT("unreal_crash_folder"));
 	if (Frames.Num() == 0)

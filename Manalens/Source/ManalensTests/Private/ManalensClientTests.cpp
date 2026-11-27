@@ -1779,6 +1779,13 @@ bool FManalensCrashParseTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("frames"), Win->GetStringField(TEXT("stack")), FString(TEXT("MyGame-Win64-Shipping.exe!UnknownFunction\nMyGame-Win64-Shipping.exe!UnknownFunction\nKERNEL32.DLL!UnknownFunction")));
 		TestFalse(TEXT("no symbols"), Win->GetBoolField(TEXT("symbolicated")));
 	}
+	const TSharedPtr<FJsonObject> Assert = FManalensClient::ParseCrashContext(TEXT("<CrashType>Assert</CrashType><ErrorMessage>Assertion failed: Save [File:Save.cpp] [Line: 12] session abcdefghijklmnopqrstuvwxyz0123456789 password=hunter2</ErrorMessage><CallStack>0x1 Game!Save() []\n</CallStack>"), FString(), {});
+	if (TestTrue(TEXT("assert parsed"), Assert.IsValid()))
+	{
+		TestEqual(TEXT("assert type"), Assert->GetStringField(TEXT("error_type")), FString(TEXT("assert")));
+		TestFalse(TEXT("long token masked in the message"), Assert->GetStringField(TEXT("message")).Contains(TEXT("abcdefghijklmnopqrstuvwxyz0123456789")));
+		TestFalse(TEXT("password masked in the message"), Assert->GetStringField(TEXT("message")).Contains(TEXT("hunter2")));
+	}
 	TestFalse(TEXT("another game is skipped"), FManalensClient::ParseCrashContext(MacContext, TEXT("OtherGame"), {}).IsValid());
 	TestFalse(TEXT("an ensure is skipped"), FManalensClient::ParseCrashContext(FString(MacContext).Replace(TEXT("<CrashType>Crash</CrashType>"), TEXT("<CrashType>Ensure</CrashType>")), TEXT("CrashSpike"), {}).IsValid());
 	const TSharedPtr<FJsonObject> Linux = FManalensClient::ParseCrashContext(TEXT("<CrashType>Crash</CrashType><ErrorMessage>Caught signal 11 Segmentation fault</ErrorMessage><CallStack>0x1 libUnrealGame.so!FFoo::Bar() [/home/alex/src/Foo.cpp:12]\n</CallStack>"), FString(), { TEXT("/home/alex") });

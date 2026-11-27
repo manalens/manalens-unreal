@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 (2026-11-27)
+
+- Crash stacks: the crash message gets the full log cleaning again, so a long token or a `password=` value in an assertion text is masked. Only Windows exception names (`EXCEPTION_ACCESS_VIOLATION` and others) are kept as they are.
+
 ## 0.5.0 (2026-11-27)
 
 - Crash stacks (P-2831): on Windows, macOS, and Linux, `app_crash` now says where the game crashed. At the next launch, the plugin reads the `CrashContext.runtime-xml` that the engine wrote for the crashed run (`Saved/Crashes`, and the engine user folder on macOS) and adds `stack`, `error_type`, `message`, `fingerprint`, `crash_source` (`unreal_crash_folder`), and `symbolicated`. No crash handler; at most 256 KB read; no minidump or log sent; each folder once; nothing before consent; ensures and stalls are skipped; folders of other games are skipped. New setting **Capture Crash Stacks** (default on) and `FManalensConfig::bCaptureCrashStacks`, `CrashDirs`, `CrashGameName`. macOS writes the crash folder only when the build includes the crash reporter.
