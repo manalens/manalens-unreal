@@ -36,7 +36,7 @@ namespace ManalensDocSnippets
 		// Open your website from the game
 		if (bOpenUrl)
 		{
-			FPlatformProcess::LaunchURL(*Manalens->LinkUrl(TEXT("https://example.com/wiki")), nullptr, nullptr);
+			FPlatformProcess::LaunchURL(*Manalens->GetHandoffUrl(TEXT("https://example.com/wiki")), nullptr, nullptr);
 		}
 
 		// Error tracking
@@ -83,7 +83,7 @@ bool FManalensDocSnippetsTest::RunTest(const FString& Parameters)
 	UManalensSubsystem* Off = NewObject<UManalensSubsystem>(GameInstance);
 	ManalensDocSnippets::Run(Off, false);
 	TestFalse(TEXT("off when the engine did not initialize it"), Off->IsActive());
-	TestEqual(TEXT("LinkUrl returns the URL unchanged when off"), Off->LinkUrl(TEXT("https://example.com")), FString(TEXT("https://example.com")));
+	TestEqual(TEXT("GetHandoffUrl returns the URL unchanged when off"), Off->GetHandoffUrl(TEXT("https://example.com")), FString(TEXT("https://example.com")));
 	TestTrue(TEXT("no anonymous ID when off"), Off->GetAnonymousId().IsEmpty());
 	return true;
 }

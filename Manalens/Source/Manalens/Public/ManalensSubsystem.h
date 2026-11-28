@@ -93,9 +93,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Manalens")
 	void Reset();
 
-	/** Add this install's handoff parameter (mana_hid) to a website URL before the game opens it. */
-	UFUNCTION(BlueprintPure, Category = "Manalens")
-	FString LinkUrl(const FString& Url) const;
+	/**
+	 * Makes a link to your website that keeps this player: adds mana_handoff=<anonymous ID>.<unix seconds> to the URL.
+	 * The value holds the current time, so call it when the player clicks (the link works for 10 minutes).
+	 * Before consent, or without an anonymous ID, it returns the URL unchanged.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Manalens", meta = (DisplayName = "Get Handoff URL"))
+	FString GetHandoffUrl(const FString& Url) const;
 
 	UFUNCTION(BlueprintPure, Category = "Manalens")
 	FString GetAnonymousId() const;

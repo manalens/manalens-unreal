@@ -31,7 +31,7 @@ if (UManalensSubsystem* Manalens = GetGameInstance()->GetSubsystem<UManalensSubs
 
 Add `"Manalens"` to the dependencies in the `Build.cs` file of your game module.
 
-The other nodes are Identify, Traits, Link Steam Ticket, Set Consent, Flush, Track Error, Reset, and Link URL. The full guide, with every setting, is in the [Unreal SDK docs](https://docs.manalens.dev/sdks/unreal).
+The other nodes are Identify, Traits, Link Steam Ticket, Set Consent, Flush, Track Error, Reset, and Get Handoff URL. **Get Handoff URL** makes a link to your website that keeps this player. The value holds the current time, so call it when the player clicks (the link works for 10 minutes). The full guide, with every setting, is in the [Unreal SDK docs](https://docs.manalens.dev/sdks/unreal).
 
 ## Traits
 

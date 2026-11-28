@@ -140,7 +140,7 @@ public:
 	static constexpr double ErrorDedupeSeconds = 1.0;
 	static constexpr double ErrorWindowSeconds = 10.0;
 	static constexpr int32 ErrorWindowMax = 20;
-	static constexpr const TCHAR* HandoffParam = TEXT("mana_hid");
+	static constexpr const TCHAR* HandoffParam = TEXT("mana_handoff");
 	static constexpr const TCHAR* StateFileName = TEXT("manalens_state.json");
 	static constexpr const TCHAR* QueueFileName = TEXT("manalens_queue.txt");
 	static constexpr const TCHAR* OptOutFileName = TEXT("manalens_optout");
@@ -301,8 +301,8 @@ public:
 	bool FlushBeforeExit(double TimeoutSeconds, const TFunction<void()>& Pump);
 	/** A normal exit: marks the saved session as exited (not a crash) and saves the queue. */
 	void FinishShutdown();
-	/** Adds mana_hid=<anonymous ID>.<unix seconds> to a website URL. Before consent the URL is unchanged. */
-	FString LinkUrl(const FString& Url) const;
+	/** Makes a link to your website that keeps this player: adds mana_handoff=<anonymous ID>.<unix seconds> to the URL. Call it when the player clicks (the link works for 10 minutes). Before consent the URL is unchanged. */
+	FString GetHandoffUrl(const FString& Url) const;
 	/** Change the collector URL. */
 	void SetEndpoint(const FString& InEndpoint);
 	/** Runs one check of the hang watchdog now (tests; the subsystem runs it on a thread). */

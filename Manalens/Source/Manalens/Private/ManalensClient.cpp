@@ -1258,7 +1258,7 @@ void FManalensClient::FinishShutdown()
 	SaveQueue();
 }
 
-FString FManalensClient::LinkUrl(const FString& InUrl) const
+FString FManalensClient::GetHandoffUrl(const FString& InUrl) const
 {
 	if (!bIdentityActive || AnonymousId.IsEmpty())
 	{

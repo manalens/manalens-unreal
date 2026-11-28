@@ -836,7 +836,7 @@ bool FManalensConsentTest::RunTest(const FString& Parameters)
 		Client->Identify(TEXT("player_42"));
 		TestEqual(TEXT("no events before consent"), Client->GetQueueSize(), 0);
 		TestTrue(TEXT("no ID before consent"), Client->GetAnonymousId().IsEmpty());
-		TestEqual(TEXT("LinkUrl is unchanged before consent"), Client->LinkUrl(TEXT("https://example.com")), FString(TEXT("https://example.com")));
+		TestEqual(TEXT("GetHandoffUrl is unchanged before consent"), Client->GetHandoffUrl(TEXT("https://example.com")), FString(TEXT("https://example.com")));
 
 		Client->SetConsent(true);
 		TestTrue(TEXT("consent starts the identity"), Client->IsIdentityActive());
@@ -1322,7 +1322,7 @@ bool FManalensBeforeSendTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensIdentityTest, "Manalens.Identity.LinkUrlAndReset", Flags)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensIdentityTest, "Manalens.Identity.GetHandoffUrlAndReset", Flags)
 bool FManalensIdentityTest::RunTest(const FString& Parameters)
 {
 	FHarness H;
@@ -1331,8 +1331,8 @@ bool FManalensIdentityTest::RunTest(const FString& Parameters)
 	TSharedRef<FManalensClient> Client = H.Start();
 	const FString Id = Client->GetAnonymousId();
 	const FString Stamp = FString::Printf(TEXT("%lld"), static_cast<long long>(H.Time));
-	TestEqual(TEXT("LinkUrl adds mana_hid"), Client->LinkUrl(TEXT("https://example.com/wiki")), FString::Printf(TEXT("https://example.com/wiki?mana_hid=%s.%s"), *Id, *Stamp));
-	TestEqual(TEXT("LinkUrl keeps the query and the fragment"), Client->LinkUrl(TEXT("https://example.com/?a=1#top")), FString::Printf(TEXT("https://example.com/?a=1&mana_hid=%s.%s#top"), *Id, *Stamp));
+	TestEqual(TEXT("GetHandoffUrl adds mana_handoff"), Client->GetHandoffUrl(TEXT("https://example.com/wiki")), FString::Printf(TEXT("https://example.com/wiki?mana_handoff=%s.%s"), *Id, *Stamp));
+	TestEqual(TEXT("GetHandoffUrl keeps the query and the fragment"), Client->GetHandoffUrl(TEXT("https://example.com/?a=1#top")), FString::Printf(TEXT("https://example.com/?a=1&mana_handoff=%s.%s#top"), *Id, *Stamp));
 
 	Client->Identify(TEXT("player_42"), Object({ { TEXT("plan"), Str(TEXT("supporter")) } }));
 	TestEqual(TEXT("user ID"), Client->GetUserId(), FString(TEXT("player_42")));

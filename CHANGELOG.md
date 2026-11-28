@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.0 (2026-11-28)
+
+- Breaking (P-2889): `LinkUrl` is now `GetHandoffUrl` (client and subsystem), and the Blueprint node **Link URL** is now **Get Handoff URL**. It makes a link to your website that keeps this player. The URL parameter is now `mana_handoff` (was `mana_hid`), with the same value: `<anonymous ID>.<unix seconds>`. The value holds the current time, so call it when the player clicks (the link works for 10 minutes). Before consent, or without an anonymous ID, the URL is unchanged, as before. The query, the fragment, and the encoding do not change. `LinkUrl` and `mana_hid` are removed, with no alias and no redirect: replace the old node in your Blueprints. Test: `Manalens.Identity.GetHandoffUrlAndReset`.
+
 ## 0.9.0 (2026-11-28)
 
 - Steam Deck (P-2882): when the environment variable `SteamDeck` is `1` (Steam sets it on a Steam Deck), every event has `context.app.device` = `steam_deck`. On other devices the key is not sent. `context.app.platform` does not change (`linux` on SteamOS, `windows` on a Steam Deck with Windows). The plugin reads the variable once in `Init()`, through the new `FManalensClient::ReadEnvironment` (tests replace it). Test: `Manalens.Context.SteamDeckDevice`.

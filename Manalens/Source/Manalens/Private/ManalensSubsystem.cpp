@@ -477,9 +477,9 @@ void UManalensSubsystem::Reset()
 	}
 }
 
-FString UManalensSubsystem::LinkUrl(const FString& Url) const
+FString UManalensSubsystem::GetHandoffUrl(const FString& Url) const
 {
-	return Client.IsValid() ? Client->LinkUrl(Url) : Url;
+	return Client.IsValid() ? Client->GetHandoffUrl(Url) : Url;
 }
 
 FString UManalensSubsystem::GetAnonymousId() const
