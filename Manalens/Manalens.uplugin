@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 16,
-	"VersionName": "0.8.1",
+	"Version": 17,
+	"VersionName": "0.9.0",
 	"FriendlyName": "Manalens",
 	"Description": "Game analytics for Unreal Engine: launches, sessions, game events, errors, and consent. Sends events to Manalens with your Publishable key.",
 	"Category": "Analytics",

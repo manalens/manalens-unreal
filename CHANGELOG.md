@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.0 (2026-11-28)
+
+- Steam Deck (P-2882): when the environment variable `SteamDeck` is `1` (Steam sets it on a Steam Deck), every event has `context.app.device` = `steam_deck`. On other devices the key is not sent. `context.app.platform` does not change (`linux` on SteamOS, `windows` on a Steam Deck with Windows). The plugin reads the variable once in `Init()`, through the new `FManalensClient::ReadEnvironment` (tests replace it). Test: `Manalens.Context.SteamDeckDevice`.
+
 ## 0.8.1 (2026-11-28)
 
 - Quit (P-2873): the send of `session_end` and the rest of the queue before the game exits is now a client method, `FManalensClient::FlushBeforeExit(TimeoutSeconds, Pump)`, with tests. It sends in batches until the queue is empty, a send fails, or **Quit Timeout Seconds** (default 2 s) pass. A transport that answers at once no longer stops the send after the first batch. It never waits longer than the timeout, stops at once with no network or after a failed send, and sends nothing without consent or after an opt-out. Unsent events stay on disk for the next launch, as before.

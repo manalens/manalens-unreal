@@ -93,6 +93,8 @@ namespace ManalensTests
 		bool bHold = false;
 		TArray<FRequest> Requests;
 		TArray<TPair<int32, int32>> SendFailed;
+		/** What ReadEnvironment returns. Empty: no variable is set. */
+		TMap<FString, FString> Environment;
 		FString Dir;
 
 		FHarness()
@@ -127,6 +129,8 @@ namespace ManalensTests
 			Client->NewId = [this]() { return bSequentialIds ? FString::Printf(TEXT("00000000-0000-4000-8000-%012d"), NextId++) : FManalensClient::NewUuidV4(); };
 			Client->Random = []() { return 0.5; };
 			Client->MonotonicNow = [this]() { return Time; };
+			// No SteamDeck variable: the fixtures are written without it.
+			Client->ReadEnvironment = [this](const FString& Name) { const FString* Value = Environment.Find(Name); return Value ? *Value : FString(); };
 			Client->OnSendFailed = [this](int32 InStatus, int32 Dropped) { SendFailed.Emplace(InStatus, Dropped); };
 			Client->Transport = [this](const FString& Url, const TArray<TPair<FString, FString>>& Headers, const FString& Body, FManalensSendDone Done)
 			{
@@ -1625,6 +1629,58 @@ bool FManalensConsoleValuesTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensSteamDeckTest, "Manalens.Context.SteamDeckDevice", Flags)
+bool FManalensSteamDeckTest::RunTest(const FString& Parameters)
+{
+	auto AppOf = [](const TSharedPtr<FJsonObject>& Event) { return Event->GetObjectField(TEXT("context"))->GetObjectField(TEXT("app")); };
+	{
+		FHarness H;
+		H.bHold = true;
+		H.Environment.Add(TEXT("SteamDeck"), TEXT("1"));
+		FManalensConfig Config = H.Config();
+		Config.Platform = TEXT("linux");
+		TSharedRef<FManalensClient> Client = H.Start(Config);
+		Client->Track(TEXT("level_start"));
+		const TArray<TSharedPtr<FJsonObject>> Events = Queued(*Client);
+		TestTrue(TEXT("events are queued"), Events.Num() > 1);
+		for (const TSharedPtr<FJsonObject>& Event : Events)
+		{
+			TestEqual(TEXT("SteamDeck=1: device"), AppOf(Event)->GetStringField(TEXT("device")), FString(TEXT("steam_deck")));
+			TestEqual(TEXT("the platform does not change"), AppOf(Event)->GetStringField(TEXT("platform")), FString(TEXT("linux")));
+		}
+	}
+	for (const TCHAR* Value : { TEXT(""), TEXT("0"), TEXT("true") })
+	{
+		FHarness H;
+		H.bHold = true;
+		if (*Value)
+		{
+			H.Environment.Add(TEXT("SteamDeck"), Value);
+		}
+		TSharedRef<FManalensClient> Client = H.Start();
+		Client->Track(TEXT("level_start"));
+		const TArray<TSharedPtr<FJsonObject>> Events = Queued(*Client);
+		TestTrue(TEXT("events are queued"), Events.Num() > 1);
+		for (const TSharedPtr<FJsonObject>& Event : Events)
+		{
+			TestFalse(FString::Printf(TEXT("SteamDeck=\"%s\": no device key"), Value), AppOf(Event)->HasField(TEXT("device")));
+			TestEqual(TEXT("platform"), AppOf(Event)->GetStringField(TEXT("platform")), FString(TEXT("windows")));
+		}
+	}
+	{
+		// Read once at Init(): a later change of the variable does not matter.
+		FHarness H;
+		H.bHold = true;
+		H.Environment.Add(TEXT("SteamDeck"), TEXT("1"));
+		TSharedRef<FManalensClient> Client = H.Start();
+		H.Environment.Reset();
+		Client->Track(TEXT("level_start"));
+		const TArray<TSharedPtr<FJsonObject>> Events = Queued(*Client);
+		TestEqual(TEXT("read once at Init()"), AppOf(Events.Last())->GetStringField(TEXT("device")), FString(TEXT("steam_deck")));
+	}
+	return true;
+}
 
 namespace
 {

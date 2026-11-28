@@ -234,6 +234,13 @@ public:
 	TFunction<FString(const TArray<uint64>&)> SymbolizeHangStack;
 	/** Watchdog thread: true while the game thread is stopped on purpose (a debugger or Blueprint breakpoint). */
 	TFunction<bool()> IsHangDebuggerPaused;
+	/**
+	 * Reads an environment variable (FPlatformMisc::GetEnvironmentVariable).
+	 * Init() calls it once, for SteamDeck: when it is "1" (Steam sets it on a
+	 * Steam Deck), every event has context.app.device "steam_deck". Tests
+	 * replace it.
+	 */
+	TFunction<FString(const FString& /*Name*/)> ReadEnvironment;
 
 	/** Checks the options and starts. Returns false and logs why when an option is wrong. */
 	bool Init(const FManalensConfig& InConfig);
@@ -476,6 +483,8 @@ private:
 	FString AnonymousId;
 	FString UserId;
 	FString SessionId;
+	/** context.app.device: "steam_deck" or empty (the key is not sent). Set once in Init(). */
+	FString Device;
 	double SessionStartedAt = 0.0;
 	double LastActivityAt = 0.0;
 	double NextTickAt = 0.0;

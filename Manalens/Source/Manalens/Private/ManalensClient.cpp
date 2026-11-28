@@ -176,6 +176,7 @@ FManalensClient::FManalensClient()
 	NewId = []() { return FManalensClient::NewUuidV4(); };
 	Random = []() { return FMath::FRand() * 0.999999; };
 	MonotonicNow = []() { return FPlatformTime::Seconds(); };
+	ReadEnvironment = [](const FString& Name) { return FPlatformMisc::GetEnvironmentVariable(*Name); };
 	Transport = [this](const FString& InUrl, const TArray<TPair<FString, FString>>& Headers, const FString& Body, FManalensSendDone Done)
 	{
 		DefaultTransport(InUrl, Headers, Body, MoveTemp(Done));
@@ -249,6 +250,9 @@ bool FManalensClient::Init(const FManalensConfig& InConfig)
 	{
 		Config.Platform = BuildPlatform();
 	}
+	// Steam sets SteamDeck=1 on a Steam Deck (SteamOS or Windows). The platform
+	// stays as it is (linux or windows); the device is a separate key.
+	Device = ReadEnvironment && ReadEnvironment(TEXT("SteamDeck")) == TEXT("1") ? FString(TEXT("steam_deck")) : FString();
 	if (Config.Locale.IsEmpty())
 	{
 		Config.Locale = FInternationalization::Get().GetCurrentCulture()->GetName();
@@ -1483,6 +1487,10 @@ TSharedRef<FJsonObject> FManalensClient::BuildContext() const
 	if (!Config.Storefront.IsEmpty())
 	{
 		App->SetStringField(TEXT("storefront"), Config.Storefront);
+	}
+	if (!Device.IsEmpty())
+	{
+		App->SetStringField(TEXT("device"), Device);
 	}
 	TSharedRef<FJsonObject> Context = MakeShared<FJsonObject>();
 	Context->SetObjectField(TEXT("app"), App);

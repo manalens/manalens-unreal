@@ -92,6 +92,10 @@ The plugin keeps events on disk and sends them in batches. Before a send, it ask
 
 The engine reports `None` from its own network monitor: Network List Manager on Windows, the network interfaces on Linux, `NWPathMonitor` on macOS and iOS, and `ConnectivityManager` on Android (UE 5.8). An engine or platform without a monitor reports `Unknown`, and the plugin sends as before.
 
+## Steam Deck
+
+Steam sets the environment variable `SteamDeck=1` on a Steam Deck. The plugin reads it once at start. On a Steam Deck, every event has `context.app.device` = `steam_deck`. On other devices, the event has no `device` key. `context.app.platform` does not change: it is `linux` on SteamOS and `windows` on a Steam Deck with Windows.
+
 ## Crash stacks
 
 After a crash, the next launch sends `game_crash`. On Windows, macOS, and Linux it also says where the game crashed. The plugin installs no crash handler: when the game crashes, the engine itself writes a crash folder with `CrashContext.runtime-xml`. At the next launch, the plugin reads the call stack and the error message from that file and adds `stack`, `error_type` (for example `EXCEPTION_ACCESS_VIOLATION` or `SIGSEGV`), `message`, `fingerprint`, `crash_source` (`unreal_crash_folder`), and `symbolicated` to `game_crash`.
