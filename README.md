@@ -14,6 +14,8 @@ If you write the settings into `Config/DefaultGame.ini` by hand, put the URL in 
 
 The engine starts the SDK with the game instance. It also sends from Play in Editor, so you can watch your events in Activity and Live View while you play. Dev and live data go to the same project. Play in Editor runs send **Editor Build** (default `dev`) in place of **Build**, so you can filter them out. To tell other test builds apart, set **Build** (for example `dev`) and filter by it. To send nothing from the editor, turn off **Enabled In Editor**.
 
+When the game quits normally (window close, Cmd+Q, the `Quit` command, or SIGINT or SIGTERM, which the engine turns into a normal quit), the plugin ends the session and sends `session_end` and the rest of the queue before the game exits. It waits at most **Quit Timeout Seconds** (Project Settings > Plugins > Manalens > Advanced, default 2 s, 0 to 10). Events it cannot send in that time, or with no network, stay on disk and go out at the next launch. Without consent nothing is sent.
+
 ## Track events
 
 In Blueprint, use **Get ManalensSubsystem**, then **Track**. In C++:

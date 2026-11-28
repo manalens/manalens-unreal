@@ -214,6 +214,11 @@ void UManalensSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	FCoreDelegates::ApplicationHasReactivatedDelegate.AddUObject(this, &UManalensSubsystem::OnReactivate);
 	FCoreDelegates::ApplicationHasEnteredForegroundDelegate.AddUObject(this, &UManalensSubsystem::OnReactivate);
 	FCoreDelegates::GetApplicationWillTerminateDelegate().AddUObject(this, &UManalensSubsystem::OnTerminate);
+	// Any normal engine exit (window close, Cmd+Q, the Quit command, SIGINT or SIGTERM,
+	// which the engine turns into a normal exit). The game instance usually shuts down
+	// first; these cover an exit that skips it. Shutdown() runs once.
+	FCoreDelegates::OnPreExit.AddUObject(this, &UManalensSubsystem::OnTerminate);
+	FCoreDelegates::OnEnginePreExit.AddUObject(this, &UManalensSubsystem::OnTerminate);
 	// A map load blocks the game thread behind a loading screen: not a hang.
 	FCoreUObjectDelegates::PreLoadMap.AddUObject(this, &UManalensSubsystem::OnPreLoadMap);
 	FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &UManalensSubsystem::OnPostLoadMap);
@@ -232,6 +237,8 @@ void UManalensSubsystem::Deinitialize()
 	FCoreDelegates::ApplicationHasReactivatedDelegate.RemoveAll(this);
 	FCoreDelegates::ApplicationHasEnteredForegroundDelegate.RemoveAll(this);
 	FCoreDelegates::GetApplicationWillTerminateDelegate().RemoveAll(this);
+	FCoreDelegates::OnPreExit.RemoveAll(this);
+	FCoreDelegates::OnEnginePreExit.RemoveAll(this);
 	FCoreUObjectDelegates::PreLoadMap.RemoveAll(this);
 	FCoreUObjectDelegates::PostLoadMapWithWorld.RemoveAll(this);
 	if (LogCapture.IsValid())
@@ -319,24 +326,11 @@ void UManalensSubsystem::Shutdown()
 	Client->BeginShutdown();
 	if (FModuleManager::Get().IsModuleLoaded(TEXT("HTTP")))
 	{
-		const double Deadline = FPlatformTime::Seconds() + QuitTimeoutSeconds;
-		while (FPlatformTime::Seconds() < Deadline)
+		Client->FlushBeforeExit(QuitTimeoutSeconds, []()
 		{
-			if (!Client->IsSending())
-			{
-				if (Client->GetQueueSize() == 0)
-				{
-					break;
-				}
-				Client->Flush();
-				if (!Client->IsSending())
-				{
-					break; // Backoff after a failure: keep the events for the next launch.
-				}
-			}
 			FHttpModule::Get().GetHttpManager().Tick(0.0f);
 			FPlatformProcess::Sleep(0.01f);
-		}
+		});
 	}
 	Client->FinishShutdown();
 }

@@ -683,6 +683,136 @@ bool FManalensShutdownTickTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
+// Quit (P-2873): session_end and the rest of the queue go out before the game exits,
+// for at most the quit timeout. The transport answers later, from the pump, as HTTP does.
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensExitFlushSendsTest, "Manalens.Exit.FlushSendsWithinLimit", Flags)
+bool FManalensExitFlushSendsTest::RunTest(const FString& Parameters)
+{
+	FHarness H;
+	FManalensConfig Config = H.Config();
+	Config.FlushAt = 20;
+	TArray<FManalensSendDone> Pending;
+	TSharedRef<FManalensClient> Client = H.Make();
+	Client->Transport = [&H, &Pending](const FString& Url, const TArray<TPair<FString, FString>>& Headers, const FString& Body, FManalensSendDone Done)
+	{
+		H.Requests.Add({ Url, Headers, Body });
+		Pending.Add(MoveTemp(Done));
+	};
+	Client->Init(Config);
+	for (int32 Index = 0; Index < 30; ++Index)
+	{
+		Client->Track(TEXT("level_start"));
+	}
+	Client->BeginShutdown();
+	const double Start = H.Time;
+	int32 Pumps = 0;
+	const bool bEmpty = Client->FlushBeforeExit(2.0, [&H, &Pending, &Pumps]()
+	{
+		++Pumps;
+		H.Time += 0.05;
+		TArray<FManalensSendDone> Ready = MoveTemp(Pending);
+		Pending.Reset();
+		for (FManalensSendDone& Done : Ready)
+		{
+			FManalensHttpResult Result;
+			Result.Status = 202;
+			Done(Result);
+		}
+	});
+	TestTrue(TEXT("the queue is sent"), bEmpty);
+	TestEqual(TEXT("the queue is empty"), Client->GetQueueSize(), 0);
+	TestEqual(TEXT("two batches (20 + 13)"), H.Requests.Num(), 2);
+	TestTrue(TEXT("within the limit"), H.Time - Start <= 2.0);
+	TestTrue(TEXT("it stops when the queue is empty"), Pumps <= 3);
+	const TArray<TSharedPtr<FJsonObject>> Last = H.Requests.Last().Events();
+	TestEqual(TEXT("session_end is in the last batch"), Last.Num() > 0 ? NameOf(Last.Last()) : FString(), FString(TEXT("session_end")));
+	Client->FinishShutdown();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensExitFlushTimeoutTest, "Manalens.Exit.FlushTimesOut", Flags)
+bool FManalensExitFlushTimeoutTest::RunTest(const FString& Parameters)
+{
+	FHarness H;
+	const double Start = H.Time;
+	{
+		H.bHold = true; // The collector never answers.
+		TSharedRef<FManalensClient> Client = H.Start();
+		Client->Track(TEXT("level_start"));
+		Client->BeginShutdown();
+		int32 Pumps = 0;
+		const bool bEmpty = Client->FlushBeforeExit(2.0, [&H, &Pumps]() { ++Pumps; H.Time += 0.25; });
+		TestFalse(TEXT("not sent"), bEmpty);
+		TestEqual(TEXT("it stops at the limit"), H.Time - Start, 2.0);
+		TestEqual(TEXT("one request, no retry loop"), H.Requests.Num(), 1);
+		TestEqual(TEXT("the pump ran until the limit"), Pumps, 8);
+		Client->FinishShutdown();
+	}
+	{
+		// A network error during the quit: stop at once and keep the events.
+		H.bHold = false;
+		H.Status = 0;
+		H.Requests.Reset();
+		TSharedRef<FManalensClient> Client = H.Start();
+		Client->BeginShutdown();
+		const double Before = H.Time;
+		int32 Pumps = 0;
+		TestFalse(TEXT("network error: not sent"), Client->FlushBeforeExit(2.0, [&H, &Pumps]() { ++Pumps; H.Time += 0.1; }));
+		TestEqual(TEXT("network error: no wait"), Pumps, 0);
+		TestEqual(TEXT("network error: no time passes"), H.Time, Before);
+		Client->FinishShutdown();
+	}
+	{
+		// The next launch sends what the quit could not: both session_end events are on disk.
+		H.Status = 202;
+		H.bHold = true;
+		TSharedRef<FManalensClient> Client = H.Start();
+		const TArray<FString> Q = Names(Queued(*Client));
+		TestEqual(TEXT("both session_end events are kept"), Q.FilterByPredicate([](const FString& N) { return N == TEXT("session_end"); }).Num(), 2);
+		TestTrue(TEXT("with the event of the first launch"), Q.Contains(TEXT("level_start")));
+		Client->FinishShutdown();
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensExitFlushConsentTest, "Manalens.Exit.NoConsentSendsNothing", Flags)
+bool FManalensExitFlushConsentTest::RunTest(const FString& Parameters)
+{
+	FHarness H;
+	FManalensConfig Config = H.Config();
+	Config.bConsentRequired = true;
+	{
+		// No consent yet.
+		TSharedRef<FManalensClient> Client = H.Start(Config);
+		Client->Track(TEXT("ignored"));
+		Client->BeginShutdown();
+		int32 Pumps = 0;
+		Client->FlushBeforeExit(2.0, [&H, &Pumps]() { ++Pumps; H.Time += 0.1; });
+		TestEqual(TEXT("no consent: no request"), H.Requests.Num(), 0);
+		TestEqual(TEXT("no consent: no wait"), Pumps, 0);
+		Client->FinishShutdown();
+	}
+	{
+		// Consent given, then withdrawn before the quit.
+		H.bHold = true;
+		TSharedRef<FManalensClient> Client = H.Start(Config);
+		Client->SetConsent(true);
+		Client->Track(TEXT("level_start"));
+		Client->SetConsent(false);
+		H.Requests.Reset();
+		Client->BeginShutdown();
+		int32 Pumps = 0;
+		Client->FlushBeforeExit(2.0, [&H, &Pumps]() { ++Pumps; H.Time += 0.1; });
+		TestEqual(TEXT("withdrawn: no request"), H.Requests.Num(), 0);
+		TestEqual(TEXT("withdrawn: no wait"), Pumps, 0);
+		TestEqual(TEXT("withdrawn: nothing queued"), Client->GetQueueSize(), 0);
+		Client->FinishShutdown();
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensConsentTest, "Manalens.Consent.WithdrawWipesState", Flags)
 bool FManalensConsentTest::RunTest(const FString& Parameters)

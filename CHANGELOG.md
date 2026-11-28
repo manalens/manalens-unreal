@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1 (2026-11-28)
+
+- Quit (P-2873): the send of `session_end` and the rest of the queue before the game exits is now a client method, `FManalensClient::FlushBeforeExit(TimeoutSeconds, Pump)`, with tests. It sends in batches until the queue is empty, a send fails, or **Quit Timeout Seconds** (default 2 s) pass. A transport that answers at once no longer stops the send after the first batch. It never waits longer than the timeout, stops at once with no network or after a failed send, and sends nothing without consent or after an opt-out. Unsent events stay on disk for the next launch, as before.
+- The plugin also runs the quit send from `FCoreDelegates::OnEnginePreExit` and `OnPreExit`, in addition to the game instance shutdown and `ApplicationWillTerminate`. So an exit that skips the game instance shutdown still sends `session_end`. It runs once per launch.
+- Tests: `Manalens.Exit.FlushSendsWithinLimit`, `Manalens.Exit.FlushTimesOut`, `Manalens.Exit.NoConsentSendsNothing`.
+
 ## 0.8.0 (2026-11-28)
 
 - Breaking: the crash event is now `game_crash` (was `app_crash`), the hang `error_type` is now `game_hang` (was `app_hang`), and `hang_duration_ms` is now `hang_duration_s` in seconds (one decimal, for example `6.2`). The plugin does not send or accept the old names. Events that an older version queued on disk keep their old name.

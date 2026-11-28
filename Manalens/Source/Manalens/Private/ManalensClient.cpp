@@ -1199,6 +1199,40 @@ void FManalensClient::BeginShutdown()
 	Flush();
 }
 
+bool FManalensClient::FlushBeforeExit(double TimeoutSeconds, const TFunction<void()>& Pump)
+{
+	if (!bInitialized || !bIdentityActive)
+	{
+		return Queue.Num() == 0; // No consent or an opt-out: nothing is sent.
+	}
+	const double Deadline = MonotonicNow() + FMath::Max(0.0, TimeoutSeconds);
+	while (MonotonicNow() < Deadline)
+	{
+		if (!bSending)
+		{
+			if (Queue.Num() == 0)
+			{
+				break;
+			}
+			const int32 Before = Queue.Num();
+			Flush();
+			if (!bSending && Queue.Num() >= Before)
+			{
+				break; // A failure (backoff) or no network: keep the events for the next launch.
+			}
+			if (!bSending)
+			{
+				continue; // The transport answered at once: send the next batch.
+			}
+		}
+		if (Pump)
+		{
+			Pump();
+		}
+	}
+	return Queue.Num() == 0;
+}
+
 void FManalensClient::FinishShutdown()
 {
 	if (!bInitialized)

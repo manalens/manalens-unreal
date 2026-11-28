@@ -283,6 +283,15 @@ public:
 	void SetFocused(bool bFocused);
 	/** Quit: ends the session, saves, clears the backoff, and starts a send. Then wait for IsSending() to become false. */
 	void BeginShutdown();
+	/**
+	 * Quit, after BeginShutdown(): sends the queue (session_end and any other event) in
+	 * batches until it is empty, a send fails, or TimeoutSeconds (MonotonicNow) pass.
+	 * Pump runs while a request is in flight: it must let the transport finish (the
+	 * subsystem ticks the HTTP manager and sleeps 10 ms). Never blocks longer than the
+	 * timeout. Sends nothing without consent or after an opt-out. Returns true when the
+	 * queue is empty. Unsent events stay queued; FinishShutdown() saves them to disk.
+	 */
+	bool FlushBeforeExit(double TimeoutSeconds, const TFunction<void()>& Pump);
 	/** A normal exit: marks the saved session as exited (not a crash) and saves the queue. */
 	void FinishShutdown();
 	/** Adds mana_hid=<anonymous ID>.<unix seconds> to a website URL. Before consent the URL is unchanged. */
