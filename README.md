@@ -10,6 +10,8 @@ It uses only engine modules (Core, CoreUObject, Engine, HTTP, Json, and Develope
 2. Open the project and let the editor build the plugin. A Blueprint-only project needs one C++ class first (**Tools > New C++ Class**).
 3. Open **Edit > Project Settings > Plugins > Manalens** and set the **Publishable Key** and the **Endpoint**.
 
+If you write the settings into `Config/DefaultGame.ini` by hand, put the URL in quotes: `Endpoint="https://events.manalens.dev"`. Unreal reads an unquoted `//` in a value as a comment, so the plugin would get `https:` and stay off.
+
 The engine starts the SDK with the game instance. It also sends from Play in Editor, so you can watch your events in Activity and Live View while you play. Dev and live data go to the same project. Play in Editor runs send **Editor Build** (default `dev`) in place of **Build**, so you can filter them out. To tell other test builds apart, set **Build** (for example `dev`) and filter by it. To send nothing from the editor, turn off **Enabled In Editor**.
 
 ## Track events
@@ -71,6 +73,16 @@ With the Steam Online Subsystem, get a Web API ticket for the identity `manalens
 - **On Steam Linked** (bLinked, Status, Code) gives the answer. `Code` is the API error code (for example `STEAM_TICKET_INVALID` or `STEAM_NOT_CONNECTED`), or `NETWORK_ERROR`, `CONSENT_REQUIRED`, or `IDENTITY_CHANGED`.
 - A refused ticket is not sent again. After a `429` with `Retry-After` (60 s or less), the plugin tries once more, but not after Set Consent (false) or Reset during the wait.
 - Say in your privacy notice that your game sends a Steam ticket to Manalens to confirm ownership.
+
+**macOS: no App Sandbox for a Steam build.** By default, UE 5 signs a packaged Mac game with an App Sandbox (`Sandbox.Server.entitlements` for Development, `Sandbox.NoNet.entitlements` for Shipping). In the sandbox, the Steam API cannot find the Steam client ("Could not determine Steam client install directory"), and `Sandbox.NoNet` blocks all network, so a Shipping build sends no events. For a Steam build, add `Build/Mac/Resources/Unrestricted.entitlements` (a plist with an empty `<dict/>`) and set it in `Config/DefaultEngine.ini`:
+
+```ini
+[/Script/MacTargetPlatform.XcodeProjectSettings]
+PremadeMacEntitlements=(FilePath="/Game/Build/Mac/Resources/Unrestricted.entitlements")
+ShippingSpecificMacEntitlements=(FilePath="/Game/Build/Mac/Resources/Unrestricted.entitlements")
+```
+
+A Mac App Store build keeps the sandbox and needs `com.apple.security.network.client` to send events. See [macOS builds and the App Sandbox](https://docs.manalens.dev/sdks/unreal#macos-builds-and-the-app-sandbox).
 
 ## No network
 

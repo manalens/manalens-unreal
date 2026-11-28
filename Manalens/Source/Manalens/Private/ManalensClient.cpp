@@ -203,6 +203,13 @@ bool FManalensClient::Init(const FManalensConfig& InConfig)
 		UE_LOG(LogManalens, Error, TEXT("Manalens: the endpoint is required"));
 		return false;
 	}
+	if (Config.Endpoint.Equals(TEXT("https:"), ESearchCase::IgnoreCase) || Config.Endpoint.Equals(TEXT("http:"), ESearchCase::IgnoreCase))
+	{
+		// Unreal reads an unquoted // in a .ini value as the start of a comment, so
+		// Endpoint=https://events.manalens.dev arrives as "https:".
+		UE_LOG(LogManalens, Error, TEXT("Manalens: the endpoint is \"%s\": Unreal reads // in a .ini value as a comment. Put the URL in quotes: Endpoint=\"https://events.manalens.dev\""), *Config.Endpoint);
+		return false;
+	}
 	if (!Config.Endpoint.StartsWith(TEXT("https://")) && !Config.Endpoint.StartsWith(TEXT("http://")))
 	{
 		UE_LOG(LogManalens, Error, TEXT("Manalens: the endpoint must start with https://"));
@@ -288,6 +295,12 @@ void FManalensClient::SetEndpoint(const FString& InEndpoint)
 	Url = Base + TEXT("/v0/events");
 	// The API host of LinkSteamTicket(): ApiEndpoint, or the endpoint with an events. host changed to api.
 	FString Api = Config.ApiEndpoint.TrimStartAndEnd();
+	if (Api.Equals(TEXT("https:"), ESearchCase::IgnoreCase) || Api.Equals(TEXT("http:"), ESearchCase::IgnoreCase))
+	{
+		// Cut at an unquoted // in the .ini (see Init()): use the default API host.
+		UE_LOG(LogManalens, Warning, TEXT("Manalens: the Api Endpoint is \"%s\": Unreal reads // in a .ini value as a comment. Put the URL in quotes. Using the default API host"), *Api);
+		Api.Reset();
+	}
 	if (Api.IsEmpty())
 	{
 		Api = Base;

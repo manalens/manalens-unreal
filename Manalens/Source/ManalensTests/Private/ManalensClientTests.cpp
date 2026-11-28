@@ -997,6 +997,28 @@ bool FManalensKeyTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensEndpointTest, "Manalens.Config.EndpointCutAtComment", Flags)
+bool FManalensEndpointTest::RunTest(const FString& Parameters)
+{
+	// An unquoted Endpoint=https://... in DefaultGame.ini reaches the plugin as "https:".
+	AddExpectedErrorPlain(TEXT("Put the URL in quotes"), EAutomationExpectedErrorFlags::Contains, 2);
+	AddExpectedErrorPlain(TEXT("the endpoint must start with https://"), EAutomationExpectedErrorFlags::Contains, 1);
+	for (const TCHAR* Endpoint : { TEXT("https:"), TEXT("http:"), TEXT("events.manalens.dev") })
+	{
+		FHarness H;
+		FManalensConfig Config = H.Config();
+		Config.Endpoint = Endpoint;
+		TSharedRef<FManalensClient> Client = H.Make();
+		TestFalse(FString::Printf(TEXT("Init refuses %s"), Endpoint), Client->Init(Config));
+		Client->Track(TEXT("level_start"));
+		Client->Flush();
+		TestEqual(TEXT("nothing is sent"), H.Requests.Num(), 0);
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensErrorTest, "Manalens.Errors.RateLimits", Flags)
 bool FManalensErrorTest::RunTest(const FString& Parameters)
 {
