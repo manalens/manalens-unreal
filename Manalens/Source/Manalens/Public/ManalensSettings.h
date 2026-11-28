@@ -94,17 +94,17 @@ public:
 
 	/**
 	 * Windows, macOS, Linux: at the next launch, add the crash stack that the engine
-	 * wrote for the crashed run (Saved/Crashes, CrashContext.runtime-xml) to app_crash.
+	 * wrote for the crashed run (Saved/Crashes, CrashContext.runtime-xml) to game_crash.
 	 * macOS writes it only when the build includes the crash reporter.
 	 */
 	UPROPERTY(config, EditAnywhere, Category = "Errors")
 	bool bCaptureCrashStacks = true;
 
 	/**
-	 * Hang detection: send an error with error_type app_hang when one frame takes
+	 * Hang detection: send an error with error_type game_hang when one frame takes
 	 * longer than this many seconds (the game thread is stuck), with the game
 	 * thread stack. A watchdog thread writes it to disk while the game is stuck,
-	 * so a game that the player kills keeps it, and app_crash links to it. 0 turns
+	 * so a game that the player kills keeps it, and game_crash links to it. 0 turns
 	 * it off; other values are clamped to 1 to 60. Not counted while the game is in
 	 * the background, during a map load,
 	 * at a debugger or Blueprint breakpoint, or in the first frames.
@@ -130,7 +130,7 @@ public:
 
 	/**
 	 * A dedicated server is not a player. Off: a dedicated server sends no
-	 * game_open, sessions, or app_crash events, and is not counted as an install.
+	 * game_open, sessions, or game_crash events, and is not counted as an install.
 	 * Track and Identify still work. On: it sends them as a client does.
 	 */
 	UPROPERTY(config, EditAnywhere, Category = "Advanced")

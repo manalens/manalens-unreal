@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Breaking: the crash event is now `game_crash` (was `app_crash`), the hang `error_type` is now `game_hang` (was `app_hang`), and `hang_duration_ms` is now `hang_duration_s` in seconds (one decimal, for example `6.2`). The plugin does not send or accept the old names. Events that an older version queued on disk keep their old name.
+
 ## 0.7.0 (2026-11-28)
 
 - Fix (P-2865): an Endpoint written by hand as `Endpoint=https://events.manalens.dev` in `DefaultGame.ini` made the plugin log "the endpoint must start with https://" and stay off. Unreal reads an unquoted `//` in a `.ini` value as the start of a comment, so the value arrived as `https:`. The plugin now names the cause: "Unreal reads // in a .ini value as a comment. Put the URL in quotes: Endpoint=\"https://events.manalens.dev\"". An **Api Endpoint** cut the same way logs a warning and uses the default API host. Project Settings always wrote the quotes. Test: `Manalens.Config.EndpointCutAtComment`.

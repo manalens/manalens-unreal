@@ -52,7 +52,7 @@ struct MANALENS_API FManalensConfig
 	bool bServerBuild = false;
 	/**
 	 * A dedicated server is not a player. false (default): on a server build the
-	 * client sends no game_open, session_start, session_end, or app_crash,
+	 * client sends no game_open, session_start, session_end, or game_crash,
 	 * so the server does not count as an install or a session. Track() and
 	 * Identify() still work. true: a server build sends them as a client does.
 	 */
@@ -60,7 +60,7 @@ struct MANALENS_API FManalensConfig
 	/**
 	 * Crash stacks (sdks/SPEC.md, P-2831). At the next launch on Windows, macOS,
 	 * and Linux, add the crash data that the engine wrote for the crashed run
-	 * (CrashContext.runtime-xml in a crash folder) to app_crash.
+	 * (CrashContext.runtime-xml in a crash folder) to game_crash.
 	 */
 	bool bCaptureCrashStacks = true;
 	/**
@@ -72,7 +72,7 @@ struct MANALENS_API FManalensConfig
 	/** The project name in CrashContext GameName (UE-<name>). Empty: any. */
 	FString CrashGameName;
 	/**
-	 * Hang detection (P-2833): an error with error_type app_hang when one frame
+	 * Hang detection (P-2833): an error with error_type game_hang when one frame
 	 * takes longer than this many seconds (the game thread is stuck). 0 turns it
 	 * off; other values are clamped to 1 to 60. Not on a quiet server build.
 	 */
@@ -150,7 +150,7 @@ public:
 	 * killed during the hang, the next launch sends it.
 	 */
 	static constexpr const TCHAR* HangFileName = TEXT("manalens_hang.json");
-	static constexpr const TCHAR* HangErrorType = TEXT("app_hang");
+	static constexpr const TCHAR* HangErrorType = TEXT("game_hang");
 	/** LinkSteamTicket(): the identity of the Steam Web API ticket. The server accepts only this one. */
 	static constexpr const TCHAR* SteamTicketIdentity = TEXT("manalens");
 	/** LinkSteamTicket() waits for a 429 Retry-After of at most this many seconds, once. */
@@ -369,7 +369,7 @@ public:
 	 */
 	static FString CleanStackFrame(const FString& Frame, const TArray<FString>& HomeDirs);
 	/**
-	 * The app_crash properties from a CrashContext.runtime-xml (crash stacks):
+	 * The game_crash properties from a CrashContext.runtime-xml (crash stacks):
 	 * stack, error_type, message, fingerprint, crash_source, symbolicated.
 	 * nullptr when the file is not a crash of this game (another GameName, an
 	 * ensure, or a stall). GameName empty: any game.
@@ -423,7 +423,7 @@ private:
 	void RecordRecoveredHang(const FManalensHangWatchdog::FHang& Hang);
 	/** Next launch: sends the hang that the game never recovered from. Returns its message_id, or empty. */
 	FString SendSavedHang();
-	/** The text of every app_hang (as the web SDK): the duration of a hang that ended, the threshold of one that never ended. */
+	/** The text of every game_hang (as the web SDK): the duration of a hang that ended, the threshold of one that never ended. */
 	static FString HangMessage(double Seconds);
 	bool ErrorAllowed(const FString& FingerprintValue, bool bAuto);
 	void ClearErrorHistory();
@@ -504,7 +504,7 @@ private:
 	int32 ErrorsDropped = 0;
 	/** Hang detection (P-2833); null when off. */
 	TUniquePtr<FManalensHangWatchdog> Hang;
-	/** The message_id of the last hang of this session (saved with the session, for app_crash). */
+	/** The message_id of the last hang of this session (saved with the session, for game_crash). */
 	FString SessionHangId;
 	/** Set to false on destruction, so a late HTTP callback does nothing. */
 	TSharedRef<bool, ESPMode::ThreadSafe> Alive;

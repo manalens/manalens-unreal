@@ -268,7 +268,7 @@ bool FManalensClient::Init(const FManalensConfig& InConfig)
 	bServerQuiet = Config.bServerBuild && !Config.bTrackServerBuilds;
 	if (bServerQuiet)
 	{
-		UE_LOG(LogManalens, Log, TEXT("Manalens: dedicated server; no game_open, session, or app_crash events. Turn on Track Server Builds to send them"));
+		UE_LOG(LogManalens, Log, TEXT("Manalens: dedicated server; no game_open, session, or game_crash events. Turn on Track Server Builds to send them"));
 	}
 	LoadState();
 	NextTickAt = Now() + Config.FlushIntervalSeconds;
@@ -1302,7 +1302,7 @@ void FManalensClient::StartIdentity()
 		Session->TryGetBoolField(TEXT("exited"), bExited);
 		Session->TryGetBoolField(TEXT("focused"), bWasFocused);
 		// A hang that the game never recovered from (it was killed while stuck),
-		// else the last hang of the session that ended: app_crash links to it.
+		// else the last hang of the session that ended: game_crash links to it.
 		FString HangId = SendSavedHang();
 		if (HangId.IsEmpty())
 		{
@@ -1333,7 +1333,7 @@ void FManalensClient::StartIdentity()
 					Crash->SetField(Pair.Key, Pair.Value);
 				}
 			}
-			Enqueue(TEXT("track"), TEXT("app_crash"), Crash, LastActivityAt);
+			Enqueue(TEXT("track"), TEXT("game_crash"), Crash, LastActivityAt);
 		}
 		EndSession(LastActivityAt);
 	}
@@ -1352,7 +1352,7 @@ void FManalensClient::StartIdentity()
 		Enqueue(TEXT("track"), TEXT("game_open"), Open);
 	}
 	SaveState();
-	// Write game_open (the install signal) and app_crash to disk before
+	// Write game_open (the install signal) and game_crash to disk before
 	// any send: a process killed before the next save would lose them.
 	SaveQueue();
 	if (DeferredIdentify.IsSet())
@@ -2116,9 +2116,10 @@ void FManalensClient::RecordRecoveredHang(const FManalensHangWatchdog::FHang& En
 	Options.bHandled = false;
 	Options.Stack = Ended.Stack;
 	TSharedPtr<FJsonObject> Extra = MakeShared<FJsonObject>();
-	const double DurationMs = FMath::RoundToDouble(Ended.DurationSeconds * 1000.0);
-	Extra->SetNumberField(TEXT("hang_duration_ms"), DurationMs);
-	const FString Id = RecordError(HangMessage(DurationMs / 1000.0), Options, SourceAuto, Extra, Ended.StartedAt, Ended.MessageId);
+	// Seconds with one decimal (6.2), as in the other SDKs.
+	const double DurationS = FMath::RoundToDouble(Ended.DurationSeconds * 10.0) / 10.0;
+	Extra->SetField(TEXT("hang_duration_s"), Number(DurationS)); // 6.2, not 6.2000000000000002
+	const FString Id = RecordError(HangMessage(DurationS), Options, SourceAuto, Extra, Ended.StartedAt, Ended.MessageId);
 	if (!Id.IsEmpty() && !SessionId.IsEmpty())
 	{
 		// A crash later in this session links to this hang.

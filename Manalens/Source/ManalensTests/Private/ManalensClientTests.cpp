@@ -385,7 +385,7 @@ bool FManalensPayloadTest::RunTest(const FString& Parameters)
 	const TArray<TSharedPtr<FJsonObject>> First = H.Requests[0].Events();
 	const TArray<TSharedPtr<FJsonObject>> Second = H.Requests[1].Events();
 	TestEqual(TEXT("first request"), FString::Join(Names(First), TEXT(",")), FString(TEXT("session_start,game_open,level_start,resource,traits,identify,error,error")));
-	TestEqual(TEXT("second request"), FString::Join(Names(Second), TEXT(",")), FString(TEXT("app_crash,session_end,session_start,game_open,level_complete,session_end")));
+	TestEqual(TEXT("second request"), FString::Join(Names(Second), TEXT(",")), FString(TEXT("game_crash,session_end,session_start,game_open,level_complete,session_end")));
 	TestEqual(TEXT("the manual error has the same fingerprint as in the Godot and Unity SDKs"), First[6]->GetObjectField(TEXT("properties"))->GetStringField(TEXT("fingerprint")), FString(TEXT("38d0e3d0139dea87")));
 	TestTrue(TEXT("integers have no fraction"), H.Requests[0].Body.Contains(TEXT("\"amount\":25,")) && H.Requests[0].Body.Contains(TEXT("\"big\":9000000000,")));
 	TestTrue(TEXT("short decimals"), H.Requests[0].Body.Contains(TEXT("\"float\":0.1,")) && H.Requests[0].Body.Contains(TEXT("\"price\":4.99,")));
@@ -623,7 +623,7 @@ bool FManalensServerBuildTest::RunTest(const FString& Parameters)
 {
 	// G-2533: a dedicated server is not a player. Two launches: the first ends
 	// without a quit (a crash), the second quits.
-	const TArray<FString> Automatic = { TEXT("game_open"), TEXT("session_start"), TEXT("session_end"), TEXT("app_crash") };
+	const TArray<FString> Automatic = { TEXT("game_open"), TEXT("session_start"), TEXT("session_end"), TEXT("game_crash") };
 	for (const bool bTrack : { false, true })
 	{
 		FHarness H;
@@ -1722,7 +1722,7 @@ bool FManalensLinkTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
-// Crash stacks (P-2831): the engine's CrashContext.runtime-xml added to app_crash.
+// Crash stacks (P-2831): the engine's CrashContext.runtime-xml added to game_crash.
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -1761,13 +1761,13 @@ namespace ManalensCrashTests
 		return static_cast<double>((FDateTime::UtcNow() - FDateTime(1970, 1, 1)).GetTicks()) / ETimespan::TicksPerSecond;
 	}
 
-	/** The properties of the newest queued app_crash (the queue keeps the earlier ones). */
+	/** The properties of the newest queued game_crash (the queue keeps the earlier ones). */
 	TSharedPtr<FJsonObject> CrashProps(const FManalensClient& Client)
 	{
 		TSharedPtr<FJsonObject> Last;
 		for (const TSharedPtr<FJsonObject>& Event : ManalensTests::Queued(Client))
 		{
-			if (ManalensTests::NameOf(Event) == TEXT("app_crash"))
+			if (ManalensTests::NameOf(Event) == TEXT("game_crash"))
 			{
 				Last = Event->GetObjectField(TEXT("properties"));
 			}
@@ -1852,7 +1852,7 @@ bool FManalensCrashReadTest::RunTest(const FString& Parameters)
 		TSharedRef<FManalensClient> Next = H.Start(Config); // It crashes too, with no new crash folder.
 		Props = CrashProps(*Next);
 	}
-	if (TestTrue(TEXT("app_crash"), Props.IsValid()))
+	if (TestTrue(TEXT("game_crash"), Props.IsValid()))
 	{
 		TestTrue(TEXT("stack added"), Props->GetStringField(TEXT("stack")).StartsWith(TEXT("CrashSpike-Mac-Shipping!CrashSpikeDeepFunction(int*)")));
 		TestEqual(TEXT("previous_build kept"), Props->GetStringField(TEXT("previous_build")), FString(TEXT("571")));
@@ -1862,7 +1862,7 @@ bool FManalensCrashReadTest::RunTest(const FString& Parameters)
 	{
 		TSharedRef<FManalensClient> Third = H.Start(Config);
 		const TSharedPtr<FJsonObject> Again = CrashProps(*Third);
-		TestTrue(TEXT("second app_crash"), Again.IsValid() && Again->GetStringField(TEXT("previous_session_id")) != Props->GetStringField(TEXT("previous_session_id")));
+		TestTrue(TEXT("second game_crash"), Again.IsValid() && Again->GetStringField(TEXT("previous_session_id")) != Props->GetStringField(TEXT("previous_session_id")));
 		TestFalse(TEXT("the same crash folder is not sent twice"), Again.IsValid() && Again->HasField(TEXT("stack")));
 	}
 	// Off: no crash data.
@@ -2042,7 +2042,7 @@ namespace ManalensHangTests
 		for (const TSharedPtr<FJsonObject>& Event : Queued(Client))
 		{
 			FString Type;
-			if (NameOf(Event) == TEXT("error") && Event->GetObjectField(TEXT("properties"))->TryGetStringField(TEXT("error_type"), Type) && Type == TEXT("app_hang"))
+			if (NameOf(Event) == TEXT("error") && Event->GetObjectField(TEXT("properties"))->TryGetStringField(TEXT("error_type"), Type) && Type == TEXT("game_hang"))
 			{
 				Out.Add(Event);
 			}
@@ -2050,13 +2050,13 @@ namespace ManalensHangTests
 		return Out;
 	}
 
-	/** The newest app_crash in the queue (the queue file keeps the events of earlier launches). */
+	/** The newest game_crash in the queue (the queue file keeps the events of earlier launches). */
 	TSharedPtr<FJsonObject> CrashOf(const FManalensClient& Client)
 	{
 		TSharedPtr<FJsonObject> Last;
 		for (const TSharedPtr<FJsonObject>& Event : Queued(Client))
 		{
-			if (NameOf(Event) == TEXT("app_crash"))
+			if (NameOf(Event) == TEXT("game_crash"))
 			{
 				Last = Event->GetObjectField(TEXT("properties"));
 			}
@@ -2087,13 +2087,13 @@ bool FManalensHangRecoveredTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("not sent while stuck"), Hangs(*Hung).Num(), 0);
 	Hung->Update();
 	const TArray<TSharedPtr<FJsonObject>> Sent = Hangs(*Hung);
-	if (TestEqual(TEXT("one app_hang"), Sent.Num(), 1))
+	if (TestEqual(TEXT("one game_hang"), Sent.Num(), 1))
 	{
 		const TSharedPtr<FJsonObject> Props = Sent[0]->GetObjectField(TEXT("properties"));
 		TestEqual(TEXT("severity"), Props->GetStringField(TEXT("severity")), FString(TEXT("error")));
 		TestEqual(TEXT("source"), Props->GetStringField(TEXT("source")), FString(TEXT("auto")));
 		TestFalse(TEXT("handled false, as a killed hang and the web SDK"), Props->GetBoolField(TEXT("handled")));
-		TestEqual(TEXT("hang_duration_ms"), Props->GetNumberField(TEXT("hang_duration_ms")), 6000.0);
+		TestEqual(TEXT("hang_duration_s"), Props->GetNumberField(TEXT("hang_duration_s")), 6.0);
 		TestEqual(TEXT("stack of the game thread"), Props->GetStringField(TEXT("stack")), FString(TEXT("Game!Busy() [Busy.cpp:12]")));
 		TestEqual(TEXT("message: the real duration"), Props->GetStringField(TEXT("message")), FString(TEXT("The main thread was blocked for 6.0 s")));
 		TestTrue(TEXT("breadcrumbs"), Props->GetStringField(TEXT("breadcrumbs")).Contains(TEXT("before_hang")));
@@ -2103,6 +2103,35 @@ bool FManalensHangRecoveredTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("the saved hang is removed"), Saved(H));
 	Hung->Update();
 	TestEqual(TEXT("once per stuck period"), Hangs(*Hung).Num(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FManalensHangSecondsTest, "Manalens.Hang.DurationInSecondsWithOneDecimal", ManalensTests::Flags)
+bool FManalensHangSecondsTest::RunTest(const FString& Parameters)
+{
+	using namespace ManalensHangTests;
+	FHarness H;
+	H.bHold = true;
+	TSharedRef<FManalensClient> Hung = H.Make();
+	Hung->Init(H.Config());
+	for (int32 Frame = 0; Frame <= FManalensHangWatchdog::WarmupFrames; ++Frame)
+	{
+		Hung->Update();
+	}
+	Stall(H, *Hung, 6.2); // 25 checks of 0.25 s: 6.25 s
+	Hung->Update();
+	const TArray<TSharedPtr<FJsonObject>> Sent = Hangs(*Hung);
+	if (TestEqual(TEXT("one game_hang"), Sent.Num(), 1))
+	{
+		const TSharedPtr<FJsonObject> Props = Sent[0]->GetObjectField(TEXT("properties"));
+		TestEqual(TEXT("message"), Props->GetStringField(TEXT("message")), FString(TEXT("The main thread was blocked for 6.3 s")));
+	}
+	bool bShort = false;
+	for (const FString& Json : Hung->GetQueuedEvents())
+	{
+		bShort |= Json.Contains(TEXT("\"hang_duration_s\":6.3,")) || Json.Contains(TEXT("\"hang_duration_s\":6.3}"));
+	}
+	TestTrue(TEXT("hang_duration_s is written as 6.3, not 6.2999999999999998"), bShort);
 	return true;
 }
 
@@ -2127,22 +2156,22 @@ bool FManalensHangKilledTest::RunTest(const FString& Parameters)
 	TSharedRef<FManalensClient> Client = H.Start(Next);
 	const TArray<TSharedPtr<FJsonObject>> Sent = Hangs(*Client);
 	const TSharedPtr<FJsonObject> Crash = CrashOf(*Client);
-	if (TestEqual(TEXT("one app_hang"), Sent.Num(), 1) && TestTrue(TEXT("app_crash"), Crash.IsValid()))
+	if (TestEqual(TEXT("one game_hang"), Sent.Num(), 1) && TestTrue(TEXT("game_crash"), Crash.IsValid()))
 	{
 		const TSharedPtr<FJsonObject> Props = Sent[0]->GetObjectField(TEXT("properties"));
 		TestEqual(TEXT("hang_message_id"), Crash->GetStringField(TEXT("hang_message_id")), Sent[0]->GetStringField(TEXT("message_id")));
 		TestEqual(TEXT("in the old session"), Sent[0]->GetStringField(TEXT("session_id")), Session);
 		TestEqual(TEXT("previous_session_id"), Crash->GetStringField(TEXT("previous_session_id")), Session);
 		TestFalse(TEXT("handled false"), Props->GetBoolField(TEXT("handled")));
-		TestFalse(TEXT("no duration for a hang that never ended"), Props->HasField(TEXT("hang_duration_ms")));
+		TestFalse(TEXT("no duration for a hang that never ended"), Props->HasField(TEXT("hang_duration_s")));
 		TestEqual(TEXT("message: the threshold"), Props->GetStringField(TEXT("message")), FString(TEXT("The main thread was blocked for 5.0 s")));
 		TestTrue(TEXT("breadcrumbs of the stuck run"), Props->GetStringField(TEXT("breadcrumbs")).Contains(TEXT("before_hang")));
 		TestEqual(TEXT("the build of the run that hung"), Sent[0]->GetObjectField(TEXT("context"))->GetObjectField(TEXT("app"))->GetStringField(TEXT("build")), FString(TEXT("571")));
 	}
-	// The queue file also has the events of the stuck launch: the hang comes just before app_crash.
+	// The queue file also has the events of the stuck launch: the hang comes just before game_crash.
 	const TArray<FString> Order = Names(Queued(*Client));
-	const int32 CrashAt = Order.Find(TEXT("app_crash"));
-	TestTrue(TEXT("the hang before app_crash"), CrashAt >= 1 && Order[CrashAt - 1] == TEXT("error"));
+	const int32 CrashAt = Order.Find(TEXT("game_crash"));
+	TestTrue(TEXT("the hang before game_crash"), CrashAt >= 1 && Order[CrashAt - 1] == TEXT("error"));
 	TestFalse(TEXT("the saved hang is removed"), Saved(H));
 	return true;
 }
@@ -2159,7 +2188,7 @@ bool FManalensHangLinkTest::RunTest(const FString& Parameters)
 		Stall(H, *Client, 6.0);
 		Client->Update();
 		const TArray<TSharedPtr<FJsonObject>> Sent = Hangs(*Client);
-		if (TestEqual(TEXT("one app_hang"), Sent.Num(), 1))
+		if (TestEqual(TEXT("one game_hang"), Sent.Num(), 1))
 		{
 			HangId = Sent[0]->GetStringField(TEXT("message_id"));
 		}
@@ -2170,7 +2199,7 @@ bool FManalensHangLinkTest::RunTest(const FString& Parameters)
 	{
 		TSharedRef<FManalensClient> Next = H.Start();
 		const TSharedPtr<FJsonObject> Crash = CrashOf(*Next);
-		TestTrue(TEXT("app_crash links to the recovered hang"), Crash.IsValid() && Crash->GetStringField(TEXT("hang_message_id")) == HangId && !HangId.IsEmpty());
+		TestTrue(TEXT("game_crash links to the recovered hang"), Crash.IsValid() && Crash->GetStringField(TEXT("hang_message_id")) == HangId && !HangId.IsEmpty());
 		H.Time += 20.0;
 		Next->Update();
 	}
@@ -2327,7 +2356,7 @@ bool FManalensHangNotCountedTest::RunTest(const FString& Parameters)
 		{
 			const TSharedPtr<FJsonObject>* Props = nullptr;
 			FString Type;
-			if (Event->TryGetObjectField(TEXT("properties"), Props) && (*Props)->TryGetStringField(TEXT("error_type"), Type) && Type == TEXT("app_hang"))
+			if (Event->TryGetObjectField(TEXT("properties"), Props) && (*Props)->TryGetStringField(TEXT("error_type"), Type) && Type == TEXT("game_hang"))
 			{
 				return nullptr;
 			}

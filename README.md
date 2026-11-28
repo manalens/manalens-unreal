@@ -92,7 +92,7 @@ The engine reports `None` from its own network monitor: Network List Manager on 
 
 ## Crash stacks
 
-After a crash, the next launch sends `app_crash`. On Windows, macOS, and Linux it also says where the game crashed. The plugin installs no crash handler: when the game crashes, the engine itself writes a crash folder with `CrashContext.runtime-xml`. At the next launch, the plugin reads the call stack and the error message from that file and adds `stack`, `error_type` (for example `EXCEPTION_ACCESS_VIOLATION` or `SIGSEGV`), `message`, `fingerprint`, `crash_source` (`unreal_crash_folder`), and `symbolicated` to `app_crash`.
+After a crash, the next launch sends `game_crash`. On Windows, macOS, and Linux it also says where the game crashed. The plugin installs no crash handler: when the game crashes, the engine itself writes a crash folder with `CrashContext.runtime-xml`. At the next launch, the plugin reads the call stack and the error message from that file and adds `stack`, `error_type` (for example `EXCEPTION_ACCESS_VIOLATION` or `SIGSEGV`), `message`, `fingerprint`, `crash_source` (`unreal_crash_folder`), and `symbolicated` to `game_crash`.
 
 - Windows and Linux: the engine writes the folder to `Saved/Crashes`.
 - macOS: the engine writes the folder only when the build includes the crash reporter (Project Settings > Packaging > **Include Crash Reporter**).
@@ -102,11 +102,11 @@ After a crash, the next launch sends `app_crash`. On Windows, macOS, and Linux i
 
 ## Hangs
 
-A frozen game that the player kills is an `app_crash` with no cause. The plugin also watches the game thread. A watchdog thread checks a heartbeat that the game thread writes once per frame. When one frame takes longer than **Hang Threshold Seconds** (default `5`; other values than `0` are clamped to 1 to 60), the game thread is stuck: the plugin sends an `error` with `error_type` `app_hang`, severity `error`, and `source` `auto`, once per stuck period.
+A frozen game that the player kills is an `game_crash` with no cause. The plugin also watches the game thread. A watchdog thread checks a heartbeat that the game thread writes once per frame. When one frame takes longer than **Hang Threshold Seconds** (default `5`; other values than `0` are clamped to 1 to 60), the game thread is stuck: the plugin sends an `error` with `error_type` `game_hang`, severity `error`, and `source` `auto`, once per stuck period.
 
 - The watchdog writes the hang to `Saved/Manalens/manalens_hang.json` while the game is stuck, so it is not lost when the player kills the game.
 - It reads the game thread stack addresses from the watchdog thread with `FPlatformStackWalk::CaptureThreadStackBackTrace` (as the engine's own hitch detector does), looks up the symbols after that (the game thread never waits for the lookup), and sends it as `stack`: `Module!Function [File:Line]` frames, at most 1024 characters. Home folders are removed. A build without symbols shows `UnknownFunction` frames.
-- Every hang has `handled` `false` and the message "The main thread was blocked for N s" (the same text as the web SDK). When the game recovers, the hang is sent with `hang_duration_ms`, and N is the real duration (one decimal). When the game was killed while stuck, the next launch sends the hang in the old session, N is the threshold, and `app_crash` gets `hang_message_id` (the `message_id` of the last hang of that session).
+- Every hang has `handled` `false` and the message "The main thread was blocked for N s" (the same text as the web SDK). When the game recovers, the hang is sent with `hang_duration_s` (seconds, one decimal, for example `6.2`), and N is that duration. When the game was killed while stuck, the next launch sends the hang in the old session, N is the threshold, and `game_crash` gets `hang_message_id` (the `message_id` of the last hang of that session).
 - `SetConsent(false)` and `Reset()` also clear the session and the breadcrumbs that the watchdog keeps, so no hang with old data is saved after them.
 - No hang is counted while the game is in the background, during a map load (a load that never ends, with no PostLoadMap, turns detection back on after 120 s), at a debugger or Blueprint breakpoint, while the editor runs a slow task, in the first 10 frames, or on a dedicated server without **Track Server Builds**.
 - Hangs use the same error limits as other automatic errors, and `BeforeSend` can drop them.
